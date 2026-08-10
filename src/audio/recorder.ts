@@ -2,7 +2,7 @@
  * Chunked microphone recorder built on MediaRecorder.
  *
  * - Negotiates a supported mime type (opus/webm preferred, mp4 for iOS Safari).
- * - Emits fixed-length chunks (default 30 s) so a crash loses at most one chunk.
+ * - Emits fixed-length chunks (default 10 s) so a crash loses at most one chunk.
  * - Holds a screen Wake Lock while recording to reduce the chance of the OS
  *   suspending the page mid-session.
  */
@@ -26,7 +26,7 @@ const MIME_CANDIDATES = [
   'audio/ogg;codecs=opus',
 ];
 
-const DEFAULT_CHUNK_MS = 30_000;
+const DEFAULT_CHUNK_MS = 10_000;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;

@@ -192,6 +192,7 @@ export class RecordView {
     if (this.busy) return;
     this.busy = true;
     this.button.disabled = true;
+    this.updateButtonVisibility();
     try {
       if (this.pipeline.isRecording) {
         await this.stop();
@@ -201,6 +202,7 @@ export class RecordView {
     } finally {
       this.busy = false;
       this.button.disabled = false;
+      this.updateButtonVisibility();
     }
   }
 
@@ -226,6 +228,7 @@ export class RecordView {
       this.startedAt = Date.now();
       this.button.classList.add('recording');
       this.transcriptEl.style.display = 'none';
+      this.spinnerEl.style.display = 'none';
       this.setStatus('Listening… tap again to stop.');
       this.promptEl.style.display = '';
       this.finishBlockBtn.style.display = 'none';
@@ -259,8 +262,19 @@ export class RecordView {
     }
     this.timerEl.textContent = '';
     this.setStatus('Writing it down…');
+    this.spinnerEl.style.display = '';
+    this.button.style.display = 'none';
+    this.timerEl.style.visibility = 'hidden';
+    // If transcription somehow never finishes, recover the button rather
+    // than stranding the user on a spinner forever.
+    const watchdog = window.setTimeout(() => {
+      this.spinnerEl.style.display = 'none';
+      this.updateButtonVisibility();
+    }, 120000);
     try {
       await this.pipeline.endSession();
+      window.clearTimeout(watchdog);
+      this.spinnerEl.style.display = 'none';
       this.setStatus('Saved. Tap the red button at the next door.');
       // Show the written note once it exists.
       if (this.transcriptEl.textContent) {
@@ -269,9 +283,13 @@ export class RecordView {
       await this.refreshBlockStatus();
       this.events.onSessionEnded();
     } catch (err) {
+      window.clearTimeout(watchdog);
+      this.spinnerEl.style.display = 'none';
       this.setStatus(
         err instanceof Error ? err.message : 'Could not save — please try again.',
       );
+    } finally {
+      this.updateButtonVisibility();
     }
   }
 

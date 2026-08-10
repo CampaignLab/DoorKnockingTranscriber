@@ -171,6 +171,37 @@ main {
   line-height: 1.4;
 }
 
+/* --- Working indicator: spinner + calming note --- */
+.working-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  text-align: center;
+}
+
+.spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 5px solid var(--line);
+  border-top-color: var(--record);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 /* The paper window where words appear / notes preview */
 .transcript-live {
   background: var(--paper-inset);
