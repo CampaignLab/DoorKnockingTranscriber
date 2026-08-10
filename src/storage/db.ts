@@ -9,9 +9,8 @@
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Insight } from '../llm/extractor';
 
-export type SessionStatus = 'recorded' | 'transcribed' | 'analysed';
+export type SessionStatus = 'recorded' | 'transcribed';
 
 export interface SessionRecord {
   id: string;
@@ -20,7 +19,6 @@ export interface SessionRecord {
   durationMs: number;
   status: SessionStatus;
   whisperModel: string;
-  llmModel: string | null;
   createdAt: number;
 }
 
@@ -41,12 +39,6 @@ export interface TranscriptRecord {
   text: string;
   /** Count of redactions applied, for the audit trail (not the PII itself). */
   redactionCount: number;
-  createdAt: number;
-}
-
-export interface InsightRecord {
-  sessionId: string;
-  insight: Insight;
   createdAt: number;
 }
 
@@ -75,32 +67,36 @@ interface DoorNotesDB extends DBSchema {
     indexes: { 'by-sessionId': string };
   };
   transcripts: { key: string; value: TranscriptRecord };
-  insights: { key: string; value: InsightRecord };
   settings: { key: string; value: SettingRecord };
 }
 
 const DB_NAME = 'door-knocking-notes';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBPDatabase<DoorNotesDB>> | null = null;
 
 function db(): Promise<IDBPDatabase<DoorNotesDB>> {
   if (!dbPromise) {
     dbPromise = openDB<DoorNotesDB>(DB_NAME, DB_VERSION, {
-      upgrade(database) {
-        const sessions = database.createObjectStore('sessions', {
-          keyPath: 'id',
-        });
-        sessions.createIndex('by-startedAt', 'startedAt');
+      upgrade(database, oldVersion) {
+        if (oldVersion < 2) {
+          const sessions = database.createObjectStore('sessions', {
+            keyPath: 'id',
+          });
+          sessions.createIndex('by-startedAt', 'startedAt');
 
-        const chunks = database.createObjectStore('audioChunks', {
-          keyPath: 'id',
-        });
-        chunks.createIndex('by-sessionId', 'sessionId');
+          const chunks = database.createObjectStore('audioChunks', {
+            keyPath: 'id',
+          });
+          chunks.createIndex('by-sessionId', 'sessionId');
 
-        database.createObjectStore('transcripts', { keyPath: 'sessionId' });
-        database.createObjectStore('insights', { keyPath: 'sessionId' });
-        database.createObjectStore('settings', { keyPath: 'key' });
+          database.createObjectStore('transcripts', { keyPath: 'sessionId' });
+          database.createObjectStore('settings', { keyPath: 'key' });
+        }
+        // v3: drop the legacy on-device LLM insights store.
+        if (oldVersion < 3 && database.objectStoreNames.contains('insights' as never)) {
+          database.deleteObjectStore('insights' as never);
+        }
       },
     });
   }
@@ -152,12 +148,11 @@ export async function listSessions(): Promise<SessionRecord[]> {
 export async function deleteSession(id: string): Promise<void> {
   const database = await db();
   const tx = database.transaction(
-    ['sessions', 'audioChunks', 'transcripts', 'insights'],
+    ['sessions', 'audioChunks', 'transcripts'],
     'readwrite',
   );
   await tx.objectStore('sessions').delete(id);
   await tx.objectStore('transcripts').delete(id);
-  await tx.objectStore('insights').delete(id);
   const chunkKeys = await tx
     .objectStore('audioChunks')
     .index('by-sessionId')
@@ -203,20 +198,4 @@ export async function getTranscript(
   sessionId: string,
 ): Promise<TranscriptRecord | undefined> {
   return (await db()).get('transcripts', sessionId);
-}
-
-// --- Insights ---
-
-export async function putInsight(record: InsightRecord): Promise<void> {
-  await (await db()).put('insights', record);
-}
-
-export async function getInsight(
-  sessionId: string,
-): Promise<InsightRecord | undefined> {
-  return (await db()).get('insights', sessionId);
-}
-
-export async function listInsights(): Promise<InsightRecord[]> {
-  return (await db()).getAll('insights');
 }

@@ -16,7 +16,7 @@ export default defineConfig({
         name: 'Door Knocking Notes',
         short_name: 'DoorNotes',
         description:
-          'Privacy-first, fully on-device door knocking notes. Record, transcribe and extract insights locally — nothing leaves your device.',
+          'Privacy-first, fully on-device door knocking notes. Record and transcribe locally — nothing leaves your device.',
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
@@ -32,8 +32,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Models are large; precache only the app shell. Model files are
-        // cached at runtime by the transformers.js / WebLLM caches.
+        // The Whisper model is large; precache only the app shell. Model
+        // files are cached at runtime by the transformers.js cache.
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         navigateFallback: 'index.html',
       },

@@ -43,7 +43,7 @@ export class App {
         this.show('detail');
       },
     });
-    this.detailView = new SessionDetailView(this.pipeline, {
+    this.detailView = new SessionDetailView({
       onBack: () => this.show('sessions'),
       onChanged: () => void this.refreshSessions(),
     });

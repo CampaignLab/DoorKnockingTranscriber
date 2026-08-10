@@ -8,11 +8,7 @@ As a door knocker, we want to be able to
 
 - Record audio of our door knocking sessions, between sessions
 - Transcribe the audio into text, locally on the device, without sending any data to the cloud
-- Pass the text into a local LLM, to extract key details such as the party they are voting for, key issues they care about
-  - This should strip out any personally identifiable information (PII) and only keep the relevant details for analysis
 
 Everything must run locally as it must be secure and we must not send any data to the cloud.
 
-For transcription we will use [Whisper](https://github.com/xenova/whisper-web).
-
-For local LLM using WebLLM
+For transcription we use [Whisper](https://github.com/xenova/whisper-web).

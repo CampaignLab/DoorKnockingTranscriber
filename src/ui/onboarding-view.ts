@@ -1,18 +1,17 @@
 /**
  * First-run onboarding flow:
  *   1. Welcome + privacy explainer
- *   2. Start downloads (Whisper Base, then Llama 3.2 3B) with progress
+ *   2. Start Whisper download with progress
  *   3. While downloading, capture the email of the councillor/MP being
  *      campaigned for (validated before continuing)
- *   4. Complete when both models are cached/loaded AND the email is saved
+ *   4. Complete when the model is cached/loaded AND the email is saved
  *
- * Persistent storage is requested up-front so the multi-GB model cache is
- * not evicted by the browser under storage pressure.
+ * Persistent storage is requested up-front so the model cache is not
+ * evicted by the browser under storage pressure.
  */
 
 import { SessionPipeline } from '../pipeline';
 import { WHISPER_MODELS, DEFAULT_WHISPER_MODEL } from '../transcription/transcription-protocol';
-import { DEFAULT_LLM_MODEL, hasWebGPU } from '../llm/extractor';
 import * as db from '../storage/db';
 import { el } from './app';
 
@@ -34,15 +33,12 @@ export class OnboardingView {
   // Download step nodes
   private whisperBar!: HTMLElement;
   private whisperStatus!: HTMLElement;
-  private llmBar!: HTMLElement;
-  private llmStatus!: HTMLElement;
   private emailInput!: HTMLInputElement;
   private emailError!: HTMLElement;
   private finishBtn!: HTMLButtonElement;
   private overallStatus!: HTMLElement;
 
   private whisperDone = false;
-  private llmDone = false;
   private downloading = false;
 
   constructor(pipeline: SessionPipeline, events: OnboardingEvents) {
@@ -63,12 +59,12 @@ export class OnboardingView {
 
     const intro = el('p', 'setup-note');
     intro.textContent =
-      'Record doorstep conversations, transcribe them, and extract what matters — voting intention and key issues — entirely on this device. Nothing is ever sent to the cloud.';
+      'Record doorstep conversations and transcribe them entirely on this device. Nothing is ever sent to the cloud.';
 
     const points = el('ul', 'setup-note');
     for (const text of [
-      'Two AI models will download once (about 2 GB total — use Wi-Fi).',
-      'After that, the app works fully offline: recording, transcription and analysis all happen on your phone.',
+      'A transcription model will download once (about 80 MB — use Wi-Fi).',
+      'After that, the app works fully offline: recording and transcription both happen on your phone.',
       'Names, addresses, phone numbers and postcodes are automatically removed from transcripts before anything is stored.',
       'Audio is not kept after transcription by default.',
     ]) {
@@ -93,11 +89,11 @@ export class OnboardingView {
     this.element.replaceChildren();
 
     const heading = el('h2');
-    heading.textContent = 'Downloading models';
+    heading.textContent = 'Downloading model';
 
     this.overallStatus = el('p', 'setup-note');
     this.overallStatus.textContent =
-      'Keep this tab open. Models are cached by the browser, so this only happens once.';
+      'Keep this tab open. The model is cached by the browser, so this only happens once.';
 
     // Whisper block
     const whisperLabel = el('p', 'setup-note');
@@ -107,31 +103,13 @@ export class OnboardingView {
     this.whisperStatus = el('p', 'setup-note');
     this.whisperStatus.textContent = 'Waiting…';
 
-    // LLM block
-    const llmLabel = el('p', 'setup-note');
-    llmLabel.style.marginBottom = '4px';
-    llmLabel.textContent = 'Insight extraction — Llama 3.2 3B';
-    this.llmBar = progressBar();
-    this.llmStatus = el('p', 'setup-note');
-
-    if (hasWebGPU()) {
-      this.llmStatus.textContent = 'Waiting…';
-    } else {
-      this.llmStatus.textContent =
-        '⚠ WebGPU is unavailable in this browser, so on-device insight ' +
-        'extraction is disabled. Recording and transcription still work. ' +
-        'To enable it: on iPhone use Safari 18.2+ (Settings → Safari → ' +
-        'Advanced → Feature Flags → WebGPU); on Android use recent Chrome.';
-      this.llmDone = true; // Nothing to download; don't block completion.
-    }
-
-    // Email capture — shown while downloads run.
+    // Email capture — shown while the download runs.
     const emailHeading = el('h3');
     emailHeading.textContent = 'While that downloads…';
 
     const emailLabel = el('label', 'setup-note');
     emailLabel.textContent =
-      'Email of the councillor or MP you are campaigning for. Session insights will be associated with this campaign.';
+      'Email of the councillor or MP you are campaigning for. Sessions will be associated with this campaign.';
     emailLabel.htmlFor = 'campaign-email';
 
     this.emailInput = document.createElement('input');
@@ -162,9 +140,6 @@ export class OnboardingView {
       whisperLabel,
       this.whisperBar,
       this.whisperStatus,
-      llmLabel,
-      this.llmBar,
-      this.llmStatus,
       emailHeading,
       emailLabel,
       this.emailInput,
@@ -176,7 +151,7 @@ export class OnboardingView {
     void this.runDownloads();
   }
 
-  /** Ask the browser not to evict the model caches under storage pressure. */
+  /** Ask the browser not to evict the model cache under storage pressure. */
   private async requestPersistentStorage(): Promise<void> {
     try {
       await navigator.storage?.persist?.();
@@ -189,7 +164,6 @@ export class OnboardingView {
     if (this.downloading) return;
     this.downloading = true;
 
-    // 1. Whisper (needed for recording at all).
     try {
       if (this.pipeline.transcriber.isReady) {
         this.whisperDone = true;
@@ -213,33 +187,6 @@ export class OnboardingView {
       return;
     }
 
-    this.updateFinishState();
-
-    // 2. LLM (best-effort; blocked only when WebGPU exists but load fails).
-    if (!this.llmDone && hasWebGPU()) {
-      try {
-        if (this.pipeline.extractor.isReady) {
-          this.llmDone = true;
-          setBar(this.llmBar, 100);
-          this.llmStatus.textContent = '✓ Already loaded.';
-        } else {
-          this.llmStatus.textContent = 'Downloading… (large — this is the slow one)';
-          await this.pipeline.extractor.load(DEFAULT_LLM_MODEL, (report) => {
-            const pct = Math.round((report.progress ?? 0) * 100);
-            setBar(this.llmBar, pct);
-            this.llmStatus.textContent = `Downloading (${pct}%)`;
-          });
-          this.llmDone = true;
-          setBar(this.llmBar, 100);
-          this.llmStatus.textContent = '✓ Insight model ready.';
-        }
-      } catch (err) {
-        // Non-fatal: transcription still works; extraction can be retried in Setup.
-        this.llmDone = true;
-        this.llmStatus.textContent = `⚠ LLM download failed (${err instanceof Error ? err.message : String(err)}). You can retry later in Setup.`;
-      }
-    }
-
     this.downloading = false;
     this.updateFinishState();
   }
@@ -247,7 +194,7 @@ export class OnboardingView {
   private updateFinishState(): void {
     if (this.step !== 'download') return;
     const emailValid = EMAIL_PATTERN.test(this.emailInput.value.trim());
-    this.finishBtn.disabled = !(this.whisperDone && this.llmDone && emailValid);
+    this.finishBtn.disabled = !(this.whisperDone && emailValid);
   }
 
   private async finish(): Promise<void> {
