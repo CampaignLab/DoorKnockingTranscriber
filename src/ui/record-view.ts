@@ -141,13 +141,17 @@ export class RecordView {
 
   /** The red button only appears when a recording can start right now. */
   private updateButtonVisibility(): void {
+    const working = this.busy || this.pipeline.isBusy;
     const canRecord =
-      !this.busy &&
-      !this.pipeline.isBusy &&
+      !working &&
       this.pipeline.transcriber.isReady &&
       ChunkedRecorder.isSupported() &&
       ChunkedRecorder.isSecureContextForMic();
-    this.button.style.display = canRecord ? '' : 'none';
+    // While a recording is being written down, the button stays on screen,
+    // disabled and gently pulsing — hiding it felt like the app had broken.
+    this.button.style.display =
+      canRecord || working ? '' : 'none';
+    this.button.classList.toggle('working', working);
     this.timerEl.style.visibility =
       canRecord || this.pipeline.isRecording ? '' : 'hidden';
   }
@@ -263,8 +267,7 @@ export class RecordView {
     this.timerEl.textContent = '';
     this.setStatus('Writing it down…');
     this.spinnerEl.style.display = '';
-    this.button.style.display = 'none';
-    this.timerEl.style.visibility = 'hidden';
+    this.updateButtonVisibility();
     // If transcription somehow never finishes, recover the button rather
     // than stranding the user on a spinner forever.
     const watchdog = window.setTimeout(() => {

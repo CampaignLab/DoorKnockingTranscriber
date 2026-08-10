@@ -141,12 +141,22 @@ main {
   }
 }
 
+/* Disabled but visible while a recording is being written down */
+.record-button.working {
+  opacity: 0.55;
+  animation: pulse 2s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .record-button.recording {
     animation: none;
     box-shadow:
       0 6px 18px rgba(28, 25, 23, 0.14),
       0 0 0 10px rgba(194, 65, 12, 0.18);
+  }
+
+  .record-button.working {
+    animation: none;
   }
 }
 
