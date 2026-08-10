@@ -32,6 +32,8 @@ export class SetupView {
   private cacheStatus!: HTMLElement;
   private emailInput!: HTMLInputElement;
   private emailStatus!: HTMLElement;
+  private notificationEmailInput!: HTMLInputElement;
+  private notificationEmailStatus!: HTMLElement;
 
   constructor(pipeline: SessionPipeline, events: SetupEvents) {
     this.pipeline = pipeline;
@@ -68,6 +70,33 @@ export class SetupView {
     emailSaveBtn.type = 'button';
     emailSaveBtn.textContent = 'Save email';
     emailSaveBtn.addEventListener('click', () => void this.saveEmail());
+
+    // --- Notification email ---
+    const notificationHeading = el('h3');
+    notificationHeading.textContent = 'Email Notifications';
+
+    const notificationLabel = el('label', 'setup-note');
+    notificationLabel.textContent =
+      'Receive summary emails when new insights are extracted (optional).';
+    notificationLabel.htmlFor = 'setup-notification-email';
+
+    this.notificationEmailInput = document.createElement('input');
+    this.notificationEmailInput.type = 'email';
+    this.notificationEmailInput.id = 'setup-notification-email';
+    this.notificationEmailInput.inputMode = 'email';
+    this.notificationEmailInput.placeholder = 'your.email@example.org (optional)';
+    this.notificationEmailInput.style.cssText =
+      'width:100%;padding:14px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--surface-2);font-size:1rem;';
+
+    this.notificationEmailStatus = el('p', 'setup-note');
+    this.notificationEmailStatus.style.fontSize = '0.9rem';
+    this.notificationEmailStatus.style.color = 'var(--muted)';
+    this.notificationEmailStatus.textContent = 'Make sure your backend server is running and configured with a Resend API key.';
+
+    const notificationSaveBtn = el('button', 'btn secondary');
+    notificationSaveBtn.type = 'button';
+    notificationSaveBtn.textContent = 'Save notification email';
+    notificationSaveBtn.addEventListener('click', () => void this.saveNotificationEmail());
 
     // --- Whisper (fixed: Base) ---
     const whisperHeading = el('h3');
@@ -117,6 +146,11 @@ export class SetupView {
       this.emailInput,
       emailSaveBtn,
       this.emailStatus,
+      notificationHeading,
+      notificationLabel,
+      this.notificationEmailInput,
+      notificationSaveBtn,
+      this.notificationEmailStatus,
       whisperHeading,
       this.whisperBtn,
       this.whisperProgress,
@@ -157,6 +191,11 @@ export class SetupView {
   private async loadEmail(): Promise<void> {
     const email = await db.getSetting(db.SETTINGS_KEYS.campaignEmail);
     if (email && !this.emailInput.value) this.emailInput.value = email;
+
+    const notificationEmail = await db.getSetting(db.SETTINGS_KEYS.notificationEmail);
+    if (notificationEmail && !this.notificationEmailInput.value) {
+      this.notificationEmailInput.value = notificationEmail;
+    }
   }
 
   private async updateCacheStatus(): Promise<void> {
@@ -190,6 +229,29 @@ export class SetupView {
     await db.putSetting(db.SETTINGS_KEYS.campaignEmail, email);
     this.emailStatus.textContent = '✓ Saved.';
     this.emailStatus.style.color = 'var(--ok)';
+    return true;
+  }
+
+  private async saveNotificationEmail(): Promise<boolean> {
+    const email = this.notificationEmailInput.value.trim();
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      this.notificationEmailStatus.textContent = 'Please enter a valid email address (or leave blank to disable notifications).';
+      this.notificationEmailStatus.style.color = 'var(--danger)';
+      return false;
+    }
+    if (email) {
+      await db.putSetting(db.SETTINGS_KEYS.notificationEmail, email);
+    } else {
+      // Clear notification email if empty
+      const existing = await db.getSetting(db.SETTINGS_KEYS.notificationEmail);
+      if (existing) {
+        await db.putSetting(db.SETTINGS_KEYS.notificationEmail, '');
+      }
+    }
+    this.notificationEmailStatus.textContent = email
+      ? '✓ Notifications enabled.'
+      : '✓ Notifications disabled.';
+    this.notificationEmailStatus.style.color = 'var(--ok)';
     return true;
   }
 

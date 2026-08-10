@@ -39,6 +39,8 @@ export class OnboardingView {
   private llmSkipBtn!: HTMLButtonElement;
   private emailInput!: HTMLInputElement;
   private emailError!: HTMLElement;
+  private notificationEmailInput!: HTMLInputElement;
+  private notificationEmailError!: HTMLElement;
   private finishBtn!: HTMLButtonElement;
   private overallStatus!: HTMLElement;
 
@@ -67,13 +69,16 @@ export class OnboardingView {
     intro.textContent =
       'Record doorstep conversations, transcribe them, and extract what matters — voting intention and key issues — entirely on this device. Nothing is ever sent to the cloud.';
 
+    const howHeading = el('h3');
+    howHeading.textContent = 'How it works';
+
     const points = el('ul', 'setup-note');
     for (const text of [
-      'The transcription model (~80 MB) downloads once — required.',
-      'The insight-extraction model (~2 GB) is optional: skip it and you can still record and transcribe, just without automatic insights. You can download it later in Setup.',
-      'After setup, the app works fully offline: everything happens on your phone.',
-      'Names, addresses, phone numbers and postcodes are automatically removed from transcripts before anything is stored.',
+      'Record a chat at the door — audio is transcribed on your phone with Whisper Base (~80 MB, downloads once).',
+      'Names, addresses, phone numbers and postcodes are automatically removed before anything is stored.',
+      'Optionally, a local Llama 3.2 model (~2 GB) extracts insights like voting intention and key issues. Skip it if you just want transcripts — you can enable it later in Setup.',
       'Audio is not kept after transcription by default.',
+      'After setup, everything works fully offline.',
     ]) {
       const li = el('li');
       li.textContent = text;
@@ -81,12 +86,27 @@ export class OnboardingView {
       points.append(li);
     }
 
+    const reqHeading = el('h3');
+    reqHeading.textContent = 'Before you start';
+
+    const reqs = el('ul', 'setup-note');
+    for (const text of [
+      'Use Wi-Fi for the first download — models are cached afterwards.',
+      'You will be asked for microphone permission — tap Allow when prompted.',
+      'On iPhone, open the app in Safari via its HTTPS address (or add it to your Home Screen) — plain http:// addresses block the microphone.',
+    ]) {
+      const li = el('li');
+      li.textContent = text;
+      li.style.marginBottom = '6px';
+      reqs.append(li);
+    }
+
     const startBtn = el('button', 'btn');
     startBtn.type = 'button';
     startBtn.textContent = 'Set up my device';
     startBtn.addEventListener('click', () => void this.renderDownload());
 
-    this.element.append(heading, intro, points, startBtn);
+    this.element.append(heading, intro, howHeading, points, reqHeading, reqs, startBtn);
   }
 
   // --- Step 2: download + email capture ---
@@ -159,6 +179,27 @@ export class OnboardingView {
     this.emailError = el('p', 'setup-note');
     this.emailError.style.color = 'var(--danger)';
 
+    const notificationEmailLabel = el('label', 'setup-note');
+    notificationEmailLabel.textContent =
+      'Your email (optional) — receive summary notifications when new insights are extracted. You can set this up later in Settings.';
+    notificationEmailLabel.htmlFor = 'notification-email';
+
+    this.notificationEmailInput = document.createElement('input');
+    this.notificationEmailInput.type = 'email';
+    this.notificationEmailInput.id = 'notification-email';
+    this.notificationEmailInput.placeholder = 'your.email@example.org';
+    this.notificationEmailInput.autocomplete = 'off';
+    this.notificationEmailInput.inputMode = 'email';
+    this.notificationEmailInput.style.cssText =
+      'width:100%;padding:14px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--surface-2);font-size:1rem;';
+    this.notificationEmailInput.addEventListener('input', () => {
+      this.notificationEmailError.textContent = '';
+      this.updateFinishState();
+    });
+
+    this.notificationEmailError = el('p', 'setup-note');
+    this.notificationEmailError.style.color = 'var(--danger)';
+
     this.finishBtn = el('button', 'btn');
     this.finishBtn.type = 'button';
     this.finishBtn.textContent = 'Finish setup';
@@ -179,6 +220,9 @@ export class OnboardingView {
       emailLabel,
       this.emailInput,
       this.emailError,
+      notificationEmailLabel,
+      this.notificationEmailInput,
+      this.notificationEmailError,
       this.finishBtn,
     );
 
@@ -276,13 +320,21 @@ export class OnboardingView {
   private updateFinishState(): void {
     if (this.step !== 'download') return;
     const emailValid = EMAIL_PATTERN.test(this.emailInput.value.trim());
-    this.finishBtn.disabled = !(this.whisperDone && this.llmDone && emailValid);
+    const notificationEmailValid = !this.notificationEmailInput.value.trim() || EMAIL_PATTERN.test(this.notificationEmailInput.value.trim());
+    this.finishBtn.disabled = !(this.whisperDone && this.llmDone && emailValid && notificationEmailValid);
   }
 
   private async finish(): Promise<void> {
     const email = this.emailInput.value.trim();
+    const notificationEmail = this.notificationEmailInput.value.trim();
+
     if (!EMAIL_PATTERN.test(email)) {
       this.emailError.textContent = 'Please enter a valid email address.';
+      return;
+    }
+
+    if (notificationEmail && !EMAIL_PATTERN.test(notificationEmail)) {
+      this.notificationEmailError.textContent = 'Please enter a valid email address (or leave blank to skip).';
       return;
     }
 
@@ -290,6 +342,9 @@ export class OnboardingView {
     this.finishBtn.textContent = 'Saving…';
 
     await db.putSetting(db.SETTINGS_KEYS.campaignEmail, email);
+    if (notificationEmail) {
+      await db.putSetting(db.SETTINGS_KEYS.notificationEmail, notificationEmail);
+    }
     await db.putSetting(db.SETTINGS_KEYS.onboarded, 'true');
     await db.putSetting(
       db.SETTINGS_KEYS.llmEnabled,

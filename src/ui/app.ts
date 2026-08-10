@@ -8,7 +8,9 @@ import { SessionsView } from './sessions-view';
 import { SessionDetailView } from './session-detail-view';
 import { SetupView } from './setup-view';
 import { OnboardingView } from './onboarding-view';
+import { sendSummaryNotification } from '../email/notify';
 import * as db from '../storage/db';
+import type { Insight } from '../llm/extractor';
 
 type ViewName = 'onboarding' | 'record' | 'sessions' | 'detail' | 'setup';
 
@@ -31,6 +33,7 @@ export class App {
     this.root = root;
     this.pipeline = new SessionPipeline({
       onError: (message) => this.showError(message),
+      onInsight: (sessionId, insight) => void this.handleNewInsight(sessionId, insight),
     });
 
     this.recordView = new RecordView(this.pipeline, {
@@ -79,6 +82,34 @@ export class App {
     // First run: onboarding (model download + campaign email) gates the app.
     const onboarded = await db.getSetting(db.SETTINGS_KEYS.onboarded);
     this.show(onboarded === 'true' ? 'record' : 'onboarding');
+  }
+
+  /**
+   * Handle a new insight: send email notification if configured
+   */
+  private async handleNewInsight(sessionId: string, insight: Insight): Promise<void> {
+    const notificationEmail = await db.getSetting(db.SETTINGS_KEYS.notificationEmail);
+    if (!notificationEmail) return;
+
+    const session = await db.getSession(sessionId);
+    if (!session) return;
+
+    const transcript = await db.getTranscript(sessionId);
+    const transcriptSummary = transcript?.text
+      ? transcript.text.substring(0, 200) + (transcript.text.length > 200 ? '…' : '')
+      : undefined;
+
+    const success = await sendSummaryNotification({
+      recipientEmail: notificationEmail,
+      sessionId,
+      session,
+      insight,
+      transcriptSummary,
+    });
+
+    if (!success) {
+      console.warn('Failed to send summary notification email');
+    }
   }
 
   show(view: ViewName): void {

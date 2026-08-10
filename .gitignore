@@ -3,3 +3,7 @@ dist
 dev-dist
 *.local
 .DS_Store
+backend/.env
+backend/dist
+backend/node_modules
+.env

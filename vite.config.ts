@@ -4,6 +4,14 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 
 export default defineConfig({
   base: './',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     // HTTPS in dev so phone browsers treat the site as a secure context and
     // allow microphone access + service workers. Accept the self-signed cert
