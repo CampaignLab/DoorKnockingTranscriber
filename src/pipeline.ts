@@ -55,6 +55,11 @@ export class SessionPipeline {
     return this.recorder?.isRecording ?? false;
   }
 
+  /** True while recording or while chunks are still being transcribed. */
+  get isBusy(): boolean {
+    return this.isRecording || this.pendingChunks > 0;
+  }
+
   async startSession(blockId: string): Promise<string> {
     if (this.sessionId) throw new Error('A session is already active');
     if (!this.transcriber.isReady) {

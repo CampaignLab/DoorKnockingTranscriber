@@ -34,6 +34,7 @@ export class RecordView {
   private timerEl!: HTMLElement;
   private promptEl!: HTMLElement;
   private transcriptEl!: HTMLElement;
+  private spinnerEl!: HTMLElement;
   private blockEl!: HTMLElement;
   private finishBlockBtn!: HTMLButtonElement;
   private notesLink!: HTMLButtonElement;
@@ -63,6 +64,7 @@ export class RecordView {
     if (!this.pipeline.isRecording && !this.busy) {
       this.setStatus(this.initialStatus());
     }
+    this.updateButtonVisibility();
     void this.refreshBlockStatus();
   }
 
@@ -94,6 +96,16 @@ export class RecordView {
     this.transcriptEl = el('div', 'transcript-live');
     this.transcriptEl.style.display = 'none';
 
+    // Spinner + calming message while a recording is being written down.
+    this.spinnerEl = el('div', 'working-note');
+    this.spinnerEl.setAttribute('role', 'status');
+    const spinnerIcon = el('span', 'spinner');
+    const spinnerText = el('p', 'setup-note');
+    spinnerText.textContent =
+      'Writing up your conversation — take a breath, this only takes a moment.';
+    this.spinnerEl.append(spinnerIcon, spinnerText);
+    this.spinnerEl.style.display = 'none';
+
     // Current block status + finish action.
     this.blockEl = el('div', 'block-status');
     this.finishBlockBtn = el('button', 'btn');
@@ -116,13 +128,28 @@ export class RecordView {
     view.append(
       area,
       this.promptEl,
+      this.spinnerEl,
       this.transcriptEl,
       this.blockEl,
       this.finishBlockBtn,
       this.notesLink,
     );
+    this.updateButtonVisibility();
     void this.refreshBlockStatus();
     return view;
+  }
+
+  /** The red button only appears when a recording can start right now. */
+  private updateButtonVisibility(): void {
+    const canRecord =
+      !this.busy &&
+      !this.pipeline.isBusy &&
+      this.pipeline.transcriber.isReady &&
+      ChunkedRecorder.isSupported() &&
+      ChunkedRecorder.isSecureContextForMic();
+    this.button.style.display = canRecord ? '' : 'none';
+    this.timerEl.style.visibility =
+      canRecord || this.pipeline.isRecording ? '' : 'hidden';
   }
 
   private initialStatus(): string {
@@ -131,6 +158,9 @@ export class RecordView {
         'The microphone needs a secure (HTTPS) address to work. ' +
         'Please open the app from its proper web address.'
       );
+    }
+    if (this.pipeline.isBusy) {
+      return 'Writing up your conversation — one moment.';
     }
     return this.pipeline.transcriber.isReady
       ? 'Ready when you are — tap the red button after visiting a house.'
