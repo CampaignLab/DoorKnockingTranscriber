@@ -32,35 +32,24 @@ export class SessionDetailView {
   private build(): HTMLElement {
     const view = el('section', 'view');
 
-    const backBtn = el('button', 'btn secondary');
+    const backBtn = el('button', 'notes-link');
     backBtn.type = 'button';
-    backBtn.textContent = '← Back';
+    backBtn.textContent = '← Back to my notes';
     backBtn.addEventListener('click', () => this.events.onBack());
 
     this.statusEl = el('div', 'record-status');
+    this.statusEl.style.maxWidth = 'none';
 
-    const transcriptHeading = el('h3');
-    transcriptHeading.textContent = 'Transcript (PII removed)';
     this.transcriptEl = el('div', 'transcript-live');
-
-    const actions = el('div');
-    actions.style.display = 'flex';
-    actions.style.gap = '10px';
+    this.transcriptEl.style.maxHeight = 'none';
+    this.transcriptEl.style.flex = '1';
 
     this.deleteBtn = el('button', 'btn danger');
     this.deleteBtn.type = 'button';
-    this.deleteBtn.textContent = 'Delete session';
+    this.deleteBtn.textContent = 'Delete this note';
     this.deleteBtn.addEventListener('click', () => void this.remove());
 
-    actions.append(this.deleteBtn);
-
-    view.append(
-      backBtn,
-      this.statusEl,
-      transcriptHeading,
-      this.transcriptEl,
-      actions,
-    );
+    view.append(backBtn, this.statusEl, this.transcriptEl, this.deleteBtn);
     return view;
   }
 
@@ -73,13 +62,17 @@ export class SessionDetailView {
     ]);
 
     if (!session) {
-      this.statusEl.textContent = 'Session not found.';
+      this.statusEl.textContent = 'This note could not be found.';
       return;
     }
 
-    this.statusEl.textContent = `${new Date(session.startedAt).toLocaleString()} · ${Math.round(session.durationMs / 1000)}s · ${transcript?.redactionCount ?? 0} redactions`;
+    this.statusEl.textContent = new Date(session.startedAt).toLocaleString(
+      undefined,
+      { dateStyle: 'full', timeStyle: 'short' },
+    );
 
-    this.transcriptEl.textContent = transcript?.text || '(no speech detected)';
+    this.transcriptEl.textContent =
+      transcript?.text || 'Nothing was heard in this recording.';
   }
 
   private async remove(): Promise<void> {
@@ -91,10 +84,10 @@ export class SessionDetailView {
       this.events.onBack();
     } else {
       this.deleteBtn.dataset.armed = 'true';
-      this.deleteBtn.textContent = 'Tap again to confirm delete';
+      this.deleteBtn.textContent = 'Tap again to really delete it';
       setTimeout(() => {
         this.deleteBtn.dataset.armed = 'false';
-        this.deleteBtn.textContent = 'Delete session';
+        this.deleteBtn.textContent = 'Delete this note';
       }, 3000);
     }
   }

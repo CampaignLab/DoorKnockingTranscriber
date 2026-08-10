@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
     />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#faf7f2" />
     <!--
       Privacy: after first load (app + models cached), the app makes zero
       network requests. connect-src allows only same-origin plus the Hugging
@@ -15,9 +15,13 @@
       storage CDN (cas-bridge/transfer/auth + regional aws.cdn.hf.co shards)
       that model downloads now redirect through.
     -->
+    <!--
+      Dev-only: http://localhost:8400 in script-src/connect-src allows the
+      Impeccable live-mode picker. Remove it before deploying to production.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data: https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://cdn-lfs-eu-1.huggingface.co https://raw.githubusercontent.com https://cas-bridge.xethub.hf.co https://transfer.xethub.hf.co https://cas-server.xethub.hf.co https://*.aws.cdn.hf.co; font-src 'self'"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' http://localhost:8400; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data: http://localhost:8400 https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://cdn-lfs-eu-1.huggingface.co https://raw.githubusercontent.com https://cas-bridge.xethub.hf.co https://transfer.xethub.hf.co https://cas-server.xethub.hf.co https://*.aws.cdn.hf.co; font-src 'self'"
     />
     <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
@@ -26,6 +30,24 @@
     <title>Door Knocking Notes</title>
   </head>
   <body>
+    <!--
+      DIRECTION CONTRACT (seed 3b537363)
+      THESIS: The app IS a desk dictaphone — one big red Record key, a counter,
+      and words appearing as you speak; it refuses the dark developer-dashboard
+      arrangement of badges, status pills, and bottom-nav chrome.
+      OWN-WORLD: warm paper ground (#faf7f2), near-black ink at elderly-legible
+      sizes (base 20px+), one dictaphone red reserved for Record, one quiet
+      green reserved for saved/ok; rounded physical keys, no cards-in-cards.
+      STORY: the canvasser opens it, reads "Everything stays on this phone",
+      presses one button at each door, and taps one button at the end of the
+      day to share the notes. Nothing else is asked of them.
+      FIRST VIEWPORT: greeting + reassurance line top, one red Record button
+      filling the centre of the screen, gentle status line beneath it. No nav
+      until there are notes to look at.
+      FORM: candidate 5 of 7 (the desk dictaphone), assigned by the roll.
+      FINISH: unreviewed and undocumented is unfinished; this build ends with
+      the finish review, the verdict, and DESIGN.md
+    -->
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

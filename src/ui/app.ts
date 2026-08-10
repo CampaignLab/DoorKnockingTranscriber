@@ -6,52 +6,57 @@ import { SessionPipeline } from '../pipeline';
 import { RecordView } from './record-view';
 import { SessionsView } from './sessions-view';
 import { SessionDetailView } from './session-detail-view';
-import { SetupView } from './setup-view';
+import { ShareView } from './share-view';
 import { OnboardingView } from './onboarding-view';
-import { sendSummaryNotification } from '../email/notify';
 import * as db from '../storage/db';
-import type { Insight } from '../llm/extractor';
 
-type ViewName = 'onboarding' | 'record' | 'sessions' | 'detail' | 'setup';
+type ViewName = 'onboarding' | 'record' | 'sessions' | 'detail' | 'share';
 
 export class App {
   private readonly root: HTMLElement;
   private readonly pipeline: SessionPipeline;
   private view: ViewName = 'record';
 
-  private header!: HTMLElement;
   private main!: HTMLElement;
-  private nav!: HTMLElement;
 
   private recordView: RecordView;
   private sessionsView: SessionsView;
   private detailView: SessionDetailView;
-  private setupView: SetupView;
+  private shareView: ShareView;
   private onboardingView: OnboardingView;
 
   constructor(root: HTMLElement) {
     this.root = root;
     this.pipeline = new SessionPipeline({
       onError: (message) => this.showError(message),
-      onInsight: (sessionId, insight) => void this.handleNewInsight(sessionId, insight),
     });
 
     this.recordView = new RecordView(this.pipeline, {
       onSessionEnded: () => void this.refreshSessions(),
-      onNeedsSetup: () => this.show('setup'),
+      onNeedsSetup: () => this.show('onboarding'),
+      onOpenNotes: () => this.show('sessions'),
+      onFinishBlock: (blockId) => {
+        void this.shareView.setBlock(blockId);
+        this.show('share');
+      },
     });
     this.sessionsView = new SessionsView({
       onOpen: (sessionId) => {
         this.detailView.setSession(sessionId);
         this.show('detail');
       },
+      onBack: () => this.show('record'),
     });
     this.detailView = new SessionDetailView({
       onBack: () => this.show('sessions'),
       onChanged: () => void this.refreshSessions(),
     });
-    this.setupView = new SetupView(this.pipeline, {
-      onReady: () => this.show('record'),
+    this.shareView = new ShareView({
+      onDone: () => {
+        this.recordView.resetBlock();
+        this.show('record');
+      },
+      onCancel: () => this.show('record'),
     });
     this.onboardingView = new OnboardingView(this.pipeline, {
       onComplete: () => this.show('record'),
@@ -59,75 +64,31 @@ export class App {
   }
 
   async mount(): Promise<void> {
-    this.header = el('header', 'app-header');
-    const title = el('h1');
-    title.textContent = 'Door Knocking Notes';
-    const badge = el('span', 'privacy-badge');
-    badge.textContent = '100% on-device';
-    this.header.append(title, badge);
-
     this.main = el('main');
 
-    this.nav = el('nav', 'bottom-nav');
-    const recordBtn = navButton('● Record', () => this.show('record'));
-    const sessionsBtn = navButton('☰ Sessions', () => this.show('sessions'));
-    const setupBtn = navButton('⚙ Setup', () => this.show('setup'));
-    recordBtn.dataset.view = 'record';
-    sessionsBtn.dataset.view = 'sessions';
-    setupBtn.dataset.view = 'setup';
-    this.nav.append(recordBtn, sessionsBtn, setupBtn);
+    this.root.append(this.main);
 
-    this.root.append(this.header, this.main, this.nav);
-
-    // First run: onboarding (model download + campaign email) gates the app.
+    // Gate on the model being ready, not on a flag: if setup was
+    // interrupted, the welcome screen is shown again and the download
+    // resumes automatically.
     const onboarded = await db.getSetting(db.SETTINGS_KEYS.onboarded);
-    this.show(onboarded === 'true' ? 'record' : 'onboarding');
-  }
-
-  /**
-   * Handle a new insight: send email notification if configured
-   */
-  private async handleNewInsight(sessionId: string, insight: Insight): Promise<void> {
-    const notificationEmail = await db.getSetting(db.SETTINGS_KEYS.notificationEmail);
-    if (!notificationEmail) return;
-
-    const session = await db.getSession(sessionId);
-    if (!session) return;
-
-    const transcript = await db.getTranscript(sessionId);
-    const transcriptSummary = transcript?.text
-      ? transcript.text.substring(0, 200) + (transcript.text.length > 200 ? '…' : '')
-      : undefined;
-
-    const success = await sendSummaryNotification({
-      recipientEmail: notificationEmail,
-      sessionId,
-      session,
-      insight,
-      transcriptSummary,
-    });
-
-    if (!success) {
-      console.warn('Failed to send summary notification email');
-    }
+    this.show(
+      onboarded === 'true' && this.pipeline.transcriber.isReady
+        ? 'record'
+        : 'onboarding',
+    );
   }
 
   show(view: ViewName): void {
     this.view = view;
     this.main.replaceChildren();
 
-    // Onboarding gates the app: hide navigation until it is complete.
-    this.nav.style.display = view === 'onboarding' ? 'none' : '';
-
-    for (const btn of Array.from(this.nav.querySelectorAll('button'))) {
-      btn.classList.toggle('active', btn.dataset.view === view);
-    }
-
     switch (view) {
       case 'onboarding':
         this.main.append(this.onboardingView.element);
         break;
       case 'record':
+        this.recordView.onShown();
         this.main.append(this.recordView.element);
         break;
       case 'sessions':
@@ -137,9 +98,8 @@ export class App {
       case 'detail':
         this.main.append(this.detailView.element);
         break;
-      case 'setup':
-        this.setupView.refresh();
-        this.main.append(this.setupView.element);
+      case 'share':
+        this.main.append(this.shareView.element);
         break;
     }
   }
@@ -163,14 +123,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   const node = document.createElement(tag);
   if (className) node.className = className;
   return node;
-}
-
-function navButton(label: string, onClick: () => void): HTMLButtonElement {
-  const btn = el('button');
-  btn.type = 'button';
-  btn.textContent = label;
-  btn.addEventListener('click', onClick);
-  return btn;
 }
 
 export { el };

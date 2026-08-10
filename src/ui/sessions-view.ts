@@ -7,6 +7,7 @@ import { el } from './app';
 
 interface SessionsViewEvents {
   onOpen: (sessionId: string) => void;
+  onBack: () => void;
 }
 
 export class SessionsView {
@@ -17,10 +18,14 @@ export class SessionsView {
   constructor(events: SessionsViewEvents) {
     this.events = events;
     this.element = el('section', 'view');
+    const backBtn = el('button', 'notes-link');
+    backBtn.type = 'button';
+    backBtn.textContent = '← Back to recording';
+    backBtn.addEventListener('click', () => this.events.onBack());
     const heading = el('h2');
-    heading.textContent = 'Sessions';
+    heading.textContent = 'My notes';
     this.listEl = el('ul', 'session-list');
-    this.element.append(heading, this.listEl);
+    this.element.append(backBtn, heading, this.listEl);
   }
 
   async refresh(): Promise<void> {
@@ -30,8 +35,8 @@ export class SessionsView {
 
     if (sessions.length === 0) {
       const empty = el('li');
-      empty.textContent = 'No sessions yet — record your first doorstep chat.';
-      empty.style.color = 'var(--muted)';
+      empty.textContent = 'Nothing here yet — your notes will appear here.';
+      empty.style.color = 'var(--ink-soft)';
       this.listEl.append(empty);
       return;
     }
@@ -42,14 +47,16 @@ export class SessionsView {
       card.tabIndex = 0;
 
       const meta = el('div', 'meta');
-      const date = el('span');
-      date.textContent = new Date(session.startedAt).toLocaleString();
-      const status = el('span', `status-pill ${session.status}`);
-      status.textContent = session.status;
-      meta.append(date, status);
+      meta.textContent = new Date(session.startedAt).toLocaleString(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
 
       const summary = el('div', 'summary');
-      summary.textContent = `${Math.round(session.durationMs / 1000)}s recording`;
+      summary.textContent =
+        session.status === 'transcribed'
+          ? `${Math.round(session.durationMs / 1000)} seconds`
+          : 'Still being written down…';
 
       card.append(meta, summary);
 

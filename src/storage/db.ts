@@ -14,11 +14,18 @@ export type SessionStatus = 'recorded' | 'transcribed';
 
 export interface SessionRecord {
   id: string;
+  /** Block this session belongs to. */
+  blockId: string;
   startedAt: number;
   endedAt: number | null;
   durationMs: number;
   status: SessionStatus;
   whisperModel: string;
+  createdAt: number;
+}
+
+export interface SessionBlockRecord {
+  id: string;
   createdAt: number;
 }
 
@@ -49,21 +56,16 @@ export interface SettingRecord {
 
 /** Well-known settings keys. */
 export const SETTINGS_KEYS = {
-  /** Email of the councillor/MP the user is campaigning for. */
-  campaignEmail: 'campaignEmail',
-  /** Email address to send summary notifications to. */
-  notificationEmail: 'notificationEmail',
-  /** 'true' once the onboarding flow has completed. */
+  /** 'true' once the onboarding flow (model download) has completed. */
   onboarded: 'onboarded',
-  /** 'true' when the user chose to download the LLM; extraction is skipped when 'false'. */
-  llmEnabled: 'llmEnabled',
 } as const;
 
 interface DoorNotesDB extends DBSchema {
+  sessionBlocks: { key: string; value: SessionBlockRecord };
   sessions: {
     key: string;
     value: SessionRecord;
-    indexes: { 'by-startedAt': number };
+    indexes: { 'by-startedAt': number; 'by-blockId': string };
   };
   audioChunks: {
     key: string;
@@ -75,7 +77,7 @@ interface DoorNotesDB extends DBSchema {
 }
 
 const DB_NAME = 'door-knocking-notes';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase<DoorNotesDB>> | null = null;
 
@@ -101,6 +103,35 @@ function db(): Promise<IDBPDatabase<DoorNotesDB>> {
         if (oldVersion < 3 && database.objectStoreNames.contains('insights' as never)) {
           database.deleteObjectStore('insights' as never);
         }
+        // v4: add session blocks. The old sessions store lacks the blockId
+        // index and its records have no blockId, so it is recreated empty —
+        // v3 sessions without blocks are not migratable.
+        if (oldVersion < 4) {
+          if (database.objectStoreNames.contains('audioChunks')) {
+            database.deleteObjectStore('audioChunks');
+          }
+          if (database.objectStoreNames.contains('transcripts')) {
+            database.deleteObjectStore('transcripts');
+          }
+          if (database.objectStoreNames.contains('sessions')) {
+            database.deleteObjectStore('sessions');
+          }
+
+          database.createObjectStore('sessionBlocks', { keyPath: 'id' });
+
+          const sessions = database.createObjectStore('sessions', {
+            keyPath: 'id',
+          });
+          sessions.createIndex('by-startedAt', 'startedAt');
+          sessions.createIndex('by-blockId', 'blockId');
+
+          const chunks = database.createObjectStore('audioChunks', {
+            keyPath: 'id',
+          });
+          chunks.createIndex('by-sessionId', 'sessionId');
+
+          database.createObjectStore('transcripts', { keyPath: 'sessionId' });
+        }
       },
     });
   }
@@ -120,6 +151,40 @@ export async function putSetting(key: string, value: string): Promise<void> {
 
 export function newSessionId(): string {
   return crypto.randomUUID();
+}
+
+// --- Session blocks ---
+
+export async function createBlock(): Promise<SessionBlockRecord> {
+  const record: SessionBlockRecord = {
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
+  await (await db()).put('sessionBlocks', record);
+  return record;
+}
+
+export async function getBlock(
+  id: string,
+): Promise<SessionBlockRecord | undefined> {
+  return (await db()).get('sessionBlocks', id);
+}
+
+export async function listSessionsForBlock(
+  blockId: string,
+): Promise<SessionRecord[]> {
+  const sessions = await (await db())
+    .getAllFromIndex('sessions', 'by-blockId', blockId);
+  return sessions.sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** Delete a block and every session, transcript, and audio chunk in it. */
+export async function deleteBlock(blockId: string): Promise<void> {
+  const sessions = await listSessionsForBlock(blockId);
+  for (const session of sessions) {
+    await deleteSession(session.id);
+  }
+  await (await db()).delete('sessionBlocks', blockId);
 }
 
 // --- Sessions ---

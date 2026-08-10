@@ -55,7 +55,7 @@ export class SessionPipeline {
     return this.recorder?.isRecording ?? false;
   }
 
-  async startSession(): Promise<string> {
+  async startSession(blockId: string): Promise<string> {
     if (this.sessionId) throw new Error('A session is already active');
     if (!this.transcriber.isReady) {
       throw new Error('Transcription model not loaded yet');
@@ -71,6 +71,7 @@ export class SessionPipeline {
 
     await db.createSession({
       id,
+      blockId,
       startedAt: this.sessionStartedAt,
       endedAt: null,
       durationMs: 0,
