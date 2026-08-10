@@ -2,8 +2,7 @@
  * IndexedDB persistence layer.
  *
  * Privacy invariants enforced here:
- *  - `transcripts` only ever receives REDACTED text (callers must run
- *    privacy/redact.ts first; pipeline.ts does this before calling put).
+ *  - Everything stays on the device — nothing is ever uploaded.
  *  - `audioChunks` retention is off by default: audio lives only in memory
  *    and is deleted/discarded as soon as it has been transcribed.
  */
@@ -42,10 +41,8 @@ export interface AudioChunkRecord {
 
 export interface TranscriptRecord {
   sessionId: string;
-  /** REDACTED text only — never store raw transcripts. */
+  /** The transcript exactly as transcribed. */
   text: string;
-  /** Count of redactions applied, for the audit trail (not the PII itself). */
-  redactionCount: number;
   createdAt: number;
 }
 
@@ -327,7 +324,7 @@ export async function deleteAudioChunksForSession(
   await tx.done;
 }
 
-// --- Transcripts (redacted only) ---
+// --- Transcripts ---
 
 export async function putTranscript(record: TranscriptRecord): Promise<void> {
   await (await db()).put('transcripts', record);

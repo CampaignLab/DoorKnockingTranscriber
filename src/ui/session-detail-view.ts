@@ -1,5 +1,5 @@
 /**
- * Session detail: redacted transcript and delete action.
+ * Session detail: transcript and delete action.
  */
 
 import * as db from '../storage/db';

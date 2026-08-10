@@ -1,6 +1,6 @@
 /**
  * Recording screen: big start/stop button, elapsed timer, consent banner,
- * live redacted transcript, and the current session block.
+ * live transcript, and the current session block.
  *
  * Flow: the first recording of the day creates a new session block; each
  * start/stop adds a session to that block. "Finish block" hands off to the
@@ -272,7 +272,7 @@ export class RecordView {
   }
 
   private pipelineEventsHook(): void {
-    // Collect the redacted transcript as chunks arrive; the box itself is
+    // Collect the transcript as chunks arrive; the box itself is
     // revealed only after the session has been saved.
     const pipeline = this.pipeline as unknown as {
       events: { onTranscriptUpdate?: (id: string, text: string) => void };

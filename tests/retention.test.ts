@@ -24,7 +24,6 @@ async function seedBlock(blockId: string, at: number): Promise<void> {
   await db.putTranscript({
     sessionId: `${blockId}-s1`,
     text: 'a note',
-    redactionCount: 0,
     createdAt: at,
   });
   // createBlock generates its own id, so write the block row directly.

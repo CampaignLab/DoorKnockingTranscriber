@@ -1,9 +1,9 @@
 /**
  * Pipeline orchestration:
- *   record chunk → transcribe → REDACT → store transcript.
+ *   record chunk → transcribe → store transcript.
  *
  * Privacy rules enforced here:
- *  - Raw transcript text exists in memory only.
+ *  - Transcripts and audio never leave the device.
  *  - Audio chunks are kept in memory unless keepAudio is enabled, and are
  *    deleted after transcription when they were persisted.
  */
@@ -12,11 +12,10 @@ import { ChunkedRecorder, decodeToMono16k, type AudioChunk } from './audio/recor
 import { Transcriber } from './transcription/transcriber';
 import type { WhisperModelId } from './transcription/transcription-protocol';
 import { pickWhisperModel } from './transcription/device';
-import { redactPII } from './privacy/redact';
 import * as db from './storage/db';
 
 export interface PipelineEvents {
-  /** Called with the running REDACTED transcript whenever a new chunk is transcribed. */
+  /** Called with the running transcript whenever a new chunk is transcribed. */
   onTranscriptUpdate?: (sessionId: string, text: string) => void;
   onStatusChange?: (status: string) => void;
   onError?: (message: string) => void;
@@ -33,8 +32,7 @@ export class SessionPipeline {
   private recorder: ChunkedRecorder | null = null;
   private sessionId: string | null = null;
   private sessionStartedAt = 0;
-  private redactedParts: string[] = [];
-  private redactionCount = 0;
+  private transcriptParts: string[] = [];
   private keepAudio: boolean;
   private whisperModel: WhisperModelId;
   private chunkQueue: Promise<void> = Promise.resolve();
@@ -81,8 +79,7 @@ export class SessionPipeline {
     const id = db.newSessionId();
     this.sessionId = id;
     this.sessionStartedAt = Date.now();
-    this.redactedParts = [];
-    this.redactionCount = 0;
+    this.transcriptParts = [];
     this.pendingChunks = 0;
     this.chunkQueue = Promise.resolve();
 
@@ -122,16 +119,13 @@ export class SessionPipeline {
         }
 
         const pcm = await decodeToMono16k(chunk.blob);
-        const rawText = await this.transcriber.transcribe(pcm);
+        const text = await this.transcriber.transcribe(pcm);
 
-        if (rawText) {
-          // REDACT BEFORE WRITE — raw text never leaves memory.
-          const { text, redactions } = redactPII(rawText);
-          this.redactionCount += redactions.length;
-          if (text) this.redactedParts.push(text);
+        if (text) {
+          this.transcriptParts.push(text);
           this.events.onTranscriptUpdate?.(
             sessionId,
-            this.redactedParts.join(' '),
+            this.transcriptParts.join(' '),
           );
         }
       } catch (err) {
@@ -145,7 +139,7 @@ export class SessionPipeline {
   }
 
   /**
-   * Stop recording, finish pending transcriptions, persist the redacted
+   * Stop recording, finish pending transcriptions, persist the
    * transcript, and clean up audio.
    */
   async endSession(): Promise<void> {
@@ -160,13 +154,12 @@ export class SessionPipeline {
     // Wait for in-flight chunk transcriptions.
     await this.chunkQueue;
 
-    const transcript = this.redactedParts.join(' ');
+    const transcript = this.transcriptParts.join(' ');
     const endedAt = Date.now();
 
     await db.putTranscript({
       sessionId,
       text: transcript,
-      redactionCount: this.redactionCount,
       createdAt: Date.now(),
     });
     await db.updateSession(sessionId, {

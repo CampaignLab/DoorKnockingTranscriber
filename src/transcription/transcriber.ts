@@ -96,7 +96,7 @@ export class Transcriber {
     return this.readyPromise;
   }
 
-  /** Transcribe mono 16 kHz PCM audio; resolves with raw (unredacted) text. */
+  /** Transcribe mono 16 kHz PCM audio; resolves with the transcript text. */
   transcribe(audio: Float32Array): Promise<string> {
     if (!this.worker || !this.ready) {
       return Promise.reject(new Error('Transcriber not loaded'));
