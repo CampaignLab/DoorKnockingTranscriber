@@ -36,6 +36,7 @@ export class OnboardingView {
   private whisperStatus!: HTMLElement;
   private llmBar!: HTMLElement;
   private llmStatus!: HTMLElement;
+  private llmSkipBtn!: HTMLButtonElement;
   private emailInput!: HTMLInputElement;
   private emailError!: HTMLElement;
   private finishBtn!: HTMLButtonElement;
@@ -43,6 +44,7 @@ export class OnboardingView {
 
   private whisperDone = false;
   private llmDone = false;
+  private llmSkipped = false;
   private downloading = false;
 
   constructor(pipeline: SessionPipeline, events: OnboardingEvents) {
@@ -67,8 +69,9 @@ export class OnboardingView {
 
     const points = el('ul', 'setup-note');
     for (const text of [
-      'Two AI models will download once (about 2 GB total — use Wi-Fi).',
-      'After that, the app works fully offline: recording, transcription and analysis all happen on your phone.',
+      'The transcription model (~80 MB) downloads once — required.',
+      'The insight-extraction model (~2 GB) is optional: skip it and you can still record and transcribe, just without automatic insights. You can download it later in Setup.',
+      'After setup, the app works fully offline: everything happens on your phone.',
       'Names, addresses, phone numbers and postcodes are automatically removed from transcripts before anything is stored.',
       'Audio is not kept after transcription by default.',
     ]) {
@@ -107,12 +110,18 @@ export class OnboardingView {
     this.whisperStatus = el('p', 'setup-note');
     this.whisperStatus.textContent = 'Waiting…';
 
-    // LLM block
+    // LLM block — optional; the user may skip it.
     const llmLabel = el('p', 'setup-note');
     llmLabel.style.marginBottom = '4px';
-    llmLabel.textContent = 'Insight extraction — Llama 3.2 3B';
+    llmLabel.textContent = 'Insight extraction — Llama 3.2 3B (optional, ~2 GB)';
     this.llmBar = progressBar();
     this.llmStatus = el('p', 'setup-note');
+
+    this.llmSkipBtn = el('button', 'btn secondary');
+    this.llmSkipBtn.type = 'button';
+    this.llmSkipBtn.textContent = 'Skip — transcribe only';
+    this.llmSkipBtn.style.display = 'none';
+    this.llmSkipBtn.addEventListener('click', () => this.skipLlm());
 
     if (hasWebGPU()) {
       this.llmStatus.textContent = 'Waiting…';
@@ -165,6 +174,7 @@ export class OnboardingView {
       llmLabel,
       this.llmBar,
       this.llmStatus,
+      this.llmSkipBtn,
       emailHeading,
       emailLabel,
       this.emailInput,
@@ -215,32 +225,51 @@ export class OnboardingView {
 
     this.updateFinishState();
 
-    // 2. LLM (best-effort; blocked only when WebGPU exists but load fails).
-    if (!this.llmDone && hasWebGPU()) {
+    // 2. LLM (optional — only if the user hasn't skipped it).
+    if (!this.llmDone && !this.llmSkipped && hasWebGPU()) {
+      this.llmSkipBtn.style.display = '';
       try {
         if (this.pipeline.extractor.isReady) {
           this.llmDone = true;
           setBar(this.llmBar, 100);
           this.llmStatus.textContent = '✓ Already loaded.';
         } else {
-          this.llmStatus.textContent = 'Downloading… (large — this is the slow one)';
+          this.llmStatus.textContent =
+            'Downloading… (large — this is the slow one). Tap “Skip” to transcribe only.';
           await this.pipeline.extractor.load(DEFAULT_LLM_MODEL, (report) => {
             const pct = Math.round((report.progress ?? 0) * 100);
             setBar(this.llmBar, pct);
-            this.llmStatus.textContent = `Downloading (${pct}%)`;
+            this.llmStatus.textContent = `Downloading (${pct}%) — tap “Skip” to transcribe only.`;
           });
           this.llmDone = true;
           setBar(this.llmBar, 100);
           this.llmStatus.textContent = '✓ Insight model ready.';
         }
       } catch (err) {
-        // Non-fatal: transcription still works; extraction can be retried in Setup.
-        this.llmDone = true;
-        this.llmStatus.textContent = `⚠ LLM download failed (${err instanceof Error ? err.message : String(err)}). You can retry later in Setup.`;
+        if (this.llmSkipped) {
+          // Skipped mid-download; extractor.load was abandoned.
+          await this.pipeline.extractor.unload();
+        } else {
+          // Non-fatal: transcription still works; retryable in Setup.
+          this.llmDone = true;
+          this.llmStatus.textContent = `⚠ LLM download failed (${err instanceof Error ? err.message : String(err)}). You can retry later in Setup.`;
+        }
       }
+      this.llmSkipBtn.style.display = 'none';
     }
 
     this.downloading = false;
+    this.updateFinishState();
+  }
+
+  /** Skip the optional LLM download; extraction stays off until Setup. */
+  private skipLlm(): void {
+    this.llmSkipped = true;
+    this.llmDone = true;
+    setBar(this.llmBar, 0);
+    this.llmStatus.textContent =
+      'Skipped. Sessions will be recorded and transcribed only — you can download the insight model later in Setup.';
+    this.llmSkipBtn.style.display = 'none';
     this.updateFinishState();
   }
 
@@ -262,6 +291,10 @@ export class OnboardingView {
 
     await db.putSetting(db.SETTINGS_KEYS.campaignEmail, email);
     await db.putSetting(db.SETTINGS_KEYS.onboarded, 'true');
+    await db.putSetting(
+      db.SETTINGS_KEYS.llmEnabled,
+      this.pipeline.extractor.isReady ? 'true' : 'false',
+    );
 
     this.events.onComplete();
   }

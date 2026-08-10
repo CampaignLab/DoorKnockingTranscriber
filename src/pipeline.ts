@@ -188,6 +188,12 @@ export class SessionPipeline {
           err instanceof Error ? err.message : 'Insight extraction failed',
         );
       }
+    } else if (!this.extractor.isReady) {
+      // LLM is optional: without it the session stays transcribed-only.
+      this.events.onStatusChange?.(
+        'Session saved (insight extraction skipped — LLM not loaded)',
+      );
+      return;
     }
 
     this.events.onStatusChange?.('Session saved');

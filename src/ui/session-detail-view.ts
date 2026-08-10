@@ -5,7 +5,7 @@
 
 import { SessionPipeline } from '../pipeline';
 import * as db from '../storage/db';
-import type { Insight } from '../llm/extractor';
+import { hasWebGPU, type Insight } from '../llm/extractor';
 import { el } from './app';
 
 interface DetailEvents {
@@ -100,20 +100,29 @@ export class SessionDetailView {
     this.transcriptEl.textContent = transcript?.text || '(no speech detected)';
     this.renderInsight(insight?.insight ?? null);
 
-    this.analyseBtn.textContent = insight
-      ? 'Re-run analysis'
-      : this.pipeline.extractor.isReady
-        ? 'Analyse now'
-        : 'Load LLM in Setup to analyse';
-    this.analyseBtn.disabled =
-      !this.pipeline.extractor.isReady || !transcript?.text.trim();
+    const hasTranscript = !!transcript?.text.trim();
+    if (insight) {
+      this.analyseBtn.textContent = 'Re-run analysis';
+      this.analyseBtn.disabled = !this.pipeline.extractor.isReady;
+    } else if (this.pipeline.extractor.isReady) {
+      this.analyseBtn.textContent = 'Analyse now';
+      this.analyseBtn.disabled = !hasTranscript;
+    } else {
+      // LLM is optional: explain why extraction didn't run and how to enable it.
+      this.analyseBtn.textContent = 'Download LLM & analyse';
+      this.analyseBtn.disabled = !hasTranscript || !hasWebGPU();
+    }
   }
 
   private renderInsight(insight: Insight | null): void {
     this.insightEl.replaceChildren();
     if (!insight) {
       const none = el('p');
-      none.textContent = 'No insights extracted yet.';
+      none.textContent = this.pipeline.extractor.isReady
+        ? 'No insights extracted yet.'
+        : hasWebGPU()
+          ? 'Insight extraction is optional and the LLM is not loaded — tap “Download LLM & analyse” below to enable it.'
+          : 'Insight extraction unavailable: this browser does not support WebGPU.';
       none.style.color = 'var(--muted)';
       this.insightEl.append(none);
       return;
@@ -146,10 +155,15 @@ export class SessionDetailView {
   }
 
   private async analyse(): Promise<void> {
-    if (!this.sessionId || !this.pipeline.extractor.isReady) return;
+    if (!this.sessionId) return;
     this.analyseBtn.disabled = true;
-    this.analyseBtn.textContent = 'Analysing…';
     try {
+      if (!this.pipeline.extractor.isReady) {
+        // User opted to enable the optional LLM from here.
+        this.analyseBtn.textContent = 'Downloading LLM…';
+        await this.pipeline.extractor.load();
+      }
+      this.analyseBtn.textContent = 'Analysing…';
       await this.pipeline.analyseSession(this.sessionId);
       await this.render();
       this.events.onChanged();
