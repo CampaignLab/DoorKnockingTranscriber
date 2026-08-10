@@ -51,8 +51,12 @@ export interface SettingRecord {
 export const SETTINGS_KEYS = {
   /** Email of the councillor/MP the user is campaigning for. */
   campaignEmail: 'campaignEmail',
+  /** Email address to send summary notifications to. */
+  notificationEmail: 'notificationEmail',
   /** 'true' once the onboarding flow has completed. */
   onboarded: 'onboarded',
+  /** 'true' when the user chose to download the LLM; extraction is skipped when 'false'. */
+  llmEnabled: 'llmEnabled',
 } as const;
 
 interface DoorNotesDB extends DBSchema {

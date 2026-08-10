@@ -191,6 +191,17 @@ export class OnboardingView {
     this.updateFinishState();
   }
 
+  /** Skip the optional LLM download; extraction stays off until Setup. */
+  private skipLlm(): void {
+    this.llmSkipped = true;
+    this.llmDone = true;
+    setBar(this.llmBar, 0);
+    this.llmStatus.textContent =
+      'Skipped. Sessions will be recorded and transcribed only — you can download the insight model later in Setup.';
+    this.llmSkipBtn.style.display = 'none';
+    this.updateFinishState();
+  }
+
   private updateFinishState(): void {
     if (this.step !== 'download') return;
     const emailValid = EMAIL_PATTERN.test(this.emailInput.value.trim());
@@ -209,6 +220,10 @@ export class OnboardingView {
 
     await db.putSetting(db.SETTINGS_KEYS.campaignEmail, email);
     await db.putSetting(db.SETTINGS_KEYS.onboarded, 'true');
+    await db.putSetting(
+      db.SETTINGS_KEYS.llmEnabled,
+      this.pipeline.extractor.isReady ? 'true' : 'false',
+    );
 
     this.events.onComplete();
   }
