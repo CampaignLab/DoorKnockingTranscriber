@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#0f172a" />
+    <!--
+      Privacy: after first load (app + models cached), the app makes zero
+      network requests. connect-src allows only same-origin plus the Hugging
+      Face endpoints used on first run: huggingface.co (metadata),
+      cdn-lfs / raw.githubusercontent (legacy file storage), and the Xet
+      storage CDN (cas-bridge/transfer/auth + regional aws.cdn.hf.co shards)
+      that model downloads now redirect through.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data: https://huggingface.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co https://cdn-lfs-eu-1.huggingface.co https://raw.githubusercontent.com https://cas-bridge.xethub.hf.co https://transfer.xethub.hf.co https://cas-server.xethub.hf.co https://*.aws.cdn.hf.co; font-src 'self'"
+    />
+    <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+    <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Door Knocking Notes</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
