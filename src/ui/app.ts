@@ -33,7 +33,6 @@ export class App {
 
     this.recordView = new RecordView(this.pipeline, {
       onSessionEnded: () => void this.refreshSessions(),
-      onNeedsSetup: () => this.show('onboarding'),
       onOpenNotes: () => this.show('sessions'),
       onFinishBlock: (blockId) => {
         void this.shareView.setBlock(blockId);

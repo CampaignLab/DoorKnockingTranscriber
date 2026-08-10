@@ -15,8 +15,6 @@ import { el } from './app';
 interface RecordViewEvents {
   /** A session was saved; session counts may have changed. */
   onSessionEnded: () => void;
-  /** The transcription model is not loaded. */
-  onNeedsSetup: () => void;
   /** User asked to see their notes. */
   onOpenNotes: () => void;
   /** User chose to finish the block and share its transcripts. */
@@ -162,9 +160,11 @@ export class RecordView {
   /** The red button only appears when a recording can start right now. */
   private updateButtonVisibility(): void {
     const working = this.busy || this.pipeline.isBusy;
+    // Note: the transcription worker does NOT need to be loaded here —
+    // it is torn down between sessions to free memory and startSession()
+    // reloads it lazily (fast, from Cache Storage).
     const canRecord =
       !working &&
-      this.pipeline.transcriber.isReady &&
       ChunkedRecorder.isSupported() &&
       ChunkedRecorder.isSecureContextForMic();
     // While a recording is being written down, the button stays on screen,
@@ -186,9 +186,10 @@ export class RecordView {
     if (this.pipeline.isBusy) {
       return 'Writing up your conversation — one moment.';
     }
-    return this.pipeline.transcriber.isReady
-      ? 'Ready when you are — tap the red button after visiting a house.'
-      : 'Still setting up — please close and reopen the app to finish.';
+    // If the model were missing entirely, mount() would have kept us on
+    // the onboarding screen — a not-ready transcriber here just means the
+    // worker is asleep between sessions and will reload on record.
+    return 'Ready when you are — tap the red button after visiting a house.';
   }
 
   private async refreshBlockStatus(): Promise<void> {
