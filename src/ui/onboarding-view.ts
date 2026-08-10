@@ -9,7 +9,6 @@
  */
 
 import { SessionPipeline } from '../pipeline';
-import { DEFAULT_WHISPER_MODEL } from '../transcription/transcription-protocol';
 import * as db from '../storage/db';
 import { el } from './app';
 
@@ -161,7 +160,9 @@ export class OnboardingView {
         updateStatus('✓ All ready.');
       } else {
         updateStatus('Setting up…');
-        await this.pipeline.transcriber.load(DEFAULT_WHISPER_MODEL, (p) => {
+        // Use the device-appropriate model picked by the pipeline (tiny
+        // on low-memory phones, base elsewhere).
+        await this.pipeline.transcriber.load(this.pipeline.model, (p) => {
           if (p.progress !== undefined) {
             updateBar(p.progress);
             updateStatus(`Setting up… ${p.progress}%`);

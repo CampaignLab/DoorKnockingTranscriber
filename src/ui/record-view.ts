@@ -54,7 +54,27 @@ export class RecordView {
   /** Reset after the block has been shared and deleted. */
   resetBlock(): void {
     this.blockId = null;
+    void db.putSetting(db.SETTINGS_KEYS.currentBlockId, '');
     void this.refreshBlockStatus();
+  }
+
+  /**
+   * Rejoin the in-progress block after a page refresh. Notes themselves
+   * always persist in IndexedDB; this restores the grouping so further
+   * recordings keep joining the same block until it is shared.
+   */
+  async restoreBlock(): Promise<void> {
+    if (this.blockId) return;
+    const stored = await db.getSetting(db.SETTINGS_KEYS.currentBlockId);
+    if (!stored) return;
+    const block = await db.getBlock(stored);
+    if (block) {
+      this.blockId = block.id;
+      await this.refreshBlockStatus();
+    } else {
+      // The block was shared (or expired) while we were away.
+      await db.putSetting(db.SETTINGS_KEYS.currentBlockId, '');
+    }
   }
 
   /** Called by the shell every time this view is shown. */
@@ -215,18 +235,22 @@ export class RecordView {
       this.setStatus('Audio recording is not supported in this browser.');
       return;
     }
-    if (!this.pipeline.transcriber.isReady) {
-      this.events.onNeedsSetup();
-      return;
-    }
+    // The pipeline reloads the model lazily now (the worker is torn down
+    // between sessions to free memory), so a not-ready transcriber is no
+    // longer a setup problem — startSession handles it.
 
     try {
       // First recording of the day creates the block; the rest join it.
       if (!this.blockId) {
         const block = await db.createBlock();
         this.blockId = block.id;
+        await db.putSetting(db.SETTINGS_KEYS.currentBlockId, block.id);
       }
 
+      // Watchdog: if the tab is killed mid-transcription (out of memory
+      // on older phones), the flag survives the reload and we can show a
+      // helpful message instead of a mysterious refresh.
+      db.setWatchdog(true);
       await this.pipeline.startSession(this.blockId);
       this.pipelineEventsHook();
       this.startedAt = Date.now();
@@ -276,6 +300,7 @@ export class RecordView {
     }, 120000);
     try {
       await this.pipeline.endSession();
+      db.setWatchdog(false);
       window.clearTimeout(watchdog);
       this.spinnerEl.style.display = 'none';
       this.setStatus('Saved. Tap the red button at the next door.');

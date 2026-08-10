@@ -68,6 +68,15 @@ export class App {
 
     this.root.append(this.main);
 
+    // Notes are kept until shared, or for one week — wipe anything older.
+    void db.purgeExpired();
+    // If the last page load died mid-transcription (out-of-memory kill on
+    // older phones reloads the tab), remember it — the message is shown
+    // after the view renders, since show() clears <main>.
+    const crashed = db.consumeWatchdog();
+    // A refresh mid-day must not orphan the block being recorded into.
+    await this.recordView.restoreBlock();
+
     // Gate on the model being ready, not on a flag: if setup was
     // interrupted, the welcome screen is shown again and the download
     // resumes automatically.
@@ -77,6 +86,13 @@ export class App {
         ? 'record'
         : 'onboarding',
     );
+
+    if (crashed) {
+      this.showError(
+        'That recording was too much for this phone and the page reloaded. ' +
+          'Your earlier notes are safe — try keeping recordings shorter.',
+      );
+    }
   }
 
   show(view: ViewName): void {

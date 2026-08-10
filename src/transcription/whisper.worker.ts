@@ -20,6 +20,13 @@ import type {
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 
+// Keep peak memory down on phones: a single WASM thread and no
+// SharedArrayBuffer paths (which also require cross-origin isolation).
+// Older devices get killed by the OS when the tab's memory budget is
+// exceeded mid-transcription, so every allocation here counts.
+env.backends.onnx.wasm.numThreads = 1;
+env.backends.onnx.wasm.simd = true;
+
 let transcriber: AutomaticSpeechRecognitionPipeline | null = null;
 let currentModel: string | null = null;
 
@@ -70,8 +77,10 @@ async function transcribe(
   }
   try {
     const output = await transcriber(audio, {
-      chunk_length_s: 30,
-      stride_length_s: 5,
+      // Smaller chunks shrink the decoder's peak KV-cache / tensor
+      // allocations — important on memory-constrained phones.
+      chunk_length_s: 15,
+      stride_length_s: 3,
       return_timestamps: false,
     });
     const text = Array.isArray(output)

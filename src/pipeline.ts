@@ -11,7 +11,7 @@
 import { ChunkedRecorder, decodeToMono16k, type AudioChunk } from './audio/recorder';
 import { Transcriber } from './transcription/transcriber';
 import type { WhisperModelId } from './transcription/transcription-protocol';
-import { DEFAULT_WHISPER_MODEL } from './transcription/transcription-protocol';
+import { pickWhisperModel } from './transcription/device';
 import { redactPII } from './privacy/redact';
 import * as db from './storage/db';
 
@@ -44,7 +44,15 @@ export class SessionPipeline {
   constructor(events: PipelineEvents = {}, options: PipelineOptions = {}) {
     this.events = events;
     this.keepAudio = options.keepAudio ?? false;
-    this.whisperModel = options.whisperModel ?? DEFAULT_WHISPER_MODEL;
+    // Pick a model the device can actually hold in memory — Whisper Base
+    // on WASM spikes past older phones' tab memory budget and the OS
+    // kills (and reloads) the page mid-transcription.
+    this.whisperModel = options.whisperModel ?? pickWhisperModel();
+  }
+
+  /** The model this pipeline will load/use. */
+  get model(): WhisperModelId {
+    return this.whisperModel;
   }
 
   get activeSessionId(): string | null {
@@ -62,8 +70,12 @@ export class SessionPipeline {
 
   async startSession(blockId: string): Promise<string> {
     if (this.sessionId) throw new Error('A session is already active');
+    // The worker is torn down between sessions to free the WASM heap, so
+    // it may need reloading here. The model files are in Cache Storage,
+    // making this reload fast and offline-safe.
     if (!this.transcriber.isReady) {
-      throw new Error('Transcription model not loaded yet');
+      this.events.onStatusChange?.('Preparing transcription…');
+      await this.transcriber.load(this.whisperModel);
     }
 
     const id = db.newSessionId();
@@ -169,6 +181,10 @@ export class SessionPipeline {
     }
 
     this.sessionId = null;
+    // Tear down the worker so the WASM heap (hundreds of MB on phones)
+    // is released between sessions. Without this, successive sessions
+    // push the tab past its memory budget until the OS kills it.
+    this.transcriber.dispose();
     this.events.onStatusChange?.('Session saved');
   }
 

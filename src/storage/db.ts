@@ -58,7 +58,39 @@ export interface SettingRecord {
 export const SETTINGS_KEYS = {
   /** 'true' once the onboarding flow (model download) has completed. */
   onboarded: 'onboarded',
+  /** Id of the block currently being recorded into, so a refresh rejoins it. */
+  currentBlockId: 'currentBlockId',
 } as const;
+
+/**
+ * Crash watchdog flag (sessionStorage, so it survives a tab kill/reload
+ * but not a fresh visit). Set before transcription starts and cleared on
+ * success; if the page reloads and this is set, the previous session was
+ * killed mid-transcription — almost always by the OS for using too much
+ * memory on an older phone.
+ */
+export const WATCHDOG_KEY = 'transcribing';
+
+export function setWatchdog(active: boolean): void {
+  try {
+    if (active) sessionStorage.setItem(WATCHDOG_KEY, '1');
+    else sessionStorage.removeItem(WATCHDOG_KEY);
+  } catch {
+    // sessionStorage unavailable (private mode etc.) — watchdog just
+    // won't fire; not worth surfacing.
+  }
+}
+
+/** True if the previous page load died mid-transcription. */
+export function consumeWatchdog(): boolean {
+  try {
+    const tripped = sessionStorage.getItem(WATCHDOG_KEY) === '1';
+    if (tripped) sessionStorage.removeItem(WATCHDOG_KEY);
+    return tripped;
+  } catch {
+    return false;
+  }
+}
 
 interface DoorNotesDB extends DBSchema {
   sessionBlocks: { key: string; value: SessionBlockRecord };
@@ -80,6 +112,13 @@ const DB_NAME = 'door-knocking-notes';
 const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase<DoorNotesDB>> | null = null;
+
+/** Close and forget the cached connection (used by tests between runs). */
+export async function closeForTests(): Promise<void> {
+  const database = await dbPromise?.catch(() => null);
+  database?.close();
+  dbPromise = null;
+}
 
 function db(): Promise<IDBPDatabase<DoorNotesDB>> {
   if (!dbPromise) {
@@ -212,6 +251,37 @@ export async function getSession(id: string): Promise<SessionRecord | undefined>
 export async function listSessions(): Promise<SessionRecord[]> {
   const all = await (await db()).getAll('sessions');
   return all.sort((a, b) => b.startedAt - a.startedAt);
+}
+
+// --- Retention ---
+
+/** Notes are kept until shared, or for at most one week. */
+export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete blocks (and all their sessions/transcripts/chunks) older than the
+ * retention window, plus any orphaned sessions. Runs once at app startup.
+ */
+export async function purgeExpired(now = Date.now()): Promise<void> {
+  const cutoff = now - RETENTION_MS;
+  const database = await db();
+  const blocks = await database.getAll('sessionBlocks');
+  const keepBlockIds = new Set<string>();
+  for (const block of blocks) {
+    if (block.createdAt >= cutoff) {
+      keepBlockIds.add(block.id);
+    } else {
+      await deleteBlock(block.id);
+    }
+  }
+  // Orphaned sessions (block deleted, e.g. mid-write crash) older than the
+  // window are wiped too — nothing personal lingers.
+  const sessions = await database.getAll('sessions');
+  for (const session of sessions) {
+    if (!keepBlockIds.has(session.blockId) && session.startedAt < cutoff) {
+      await deleteSession(session.id);
+    }
+  }
 }
 
 export async function deleteSession(id: string): Promise<void> {

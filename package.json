@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vite-plugin-pwa": "^0.21.1",
