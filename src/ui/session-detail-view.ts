@@ -1,11 +1,8 @@
 /**
- * Session detail: redacted transcript, insight card, actions
- * (analyse/re-analyse, delete).
+ * Session detail: redacted transcript and delete action.
  */
 
-import { SessionPipeline } from '../pipeline';
 import * as db from '../storage/db';
-import { hasWebGPU, type Insight } from '../llm/extractor';
 import { el } from './app';
 
 interface DetailEvents {
@@ -15,18 +12,14 @@ interface DetailEvents {
 
 export class SessionDetailView {
   readonly element: HTMLElement;
-  private readonly pipeline: SessionPipeline;
   private readonly events: DetailEvents;
   private sessionId: string | null = null;
 
   private statusEl!: HTMLElement;
   private transcriptEl!: HTMLElement;
-  private insightEl!: HTMLElement;
-  private analyseBtn!: HTMLButtonElement;
   private deleteBtn!: HTMLButtonElement;
 
-  constructor(pipeline: SessionPipeline, events: DetailEvents) {
-    this.pipeline = pipeline;
+  constructor(events: DetailEvents) {
     this.events = events;
     this.element = this.build();
   }
@@ -50,32 +43,22 @@ export class SessionDetailView {
     transcriptHeading.textContent = 'Transcript (PII removed)';
     this.transcriptEl = el('div', 'transcript-live');
 
-    const insightHeading = el('h3');
-    insightHeading.textContent = 'Insights';
-    this.insightEl = el('div');
-
     const actions = el('div');
     actions.style.display = 'flex';
     actions.style.gap = '10px';
-
-    this.analyseBtn = el('button', 'btn');
-    this.analyseBtn.type = 'button';
-    this.analyseBtn.addEventListener('click', () => void this.analyse());
 
     this.deleteBtn = el('button', 'btn danger');
     this.deleteBtn.type = 'button';
     this.deleteBtn.textContent = 'Delete session';
     this.deleteBtn.addEventListener('click', () => void this.remove());
 
-    actions.append(this.analyseBtn, this.deleteBtn);
+    actions.append(this.deleteBtn);
 
     view.append(
       backBtn,
       this.statusEl,
       transcriptHeading,
       this.transcriptEl,
-      insightHeading,
-      this.insightEl,
       actions,
     );
     return view;
@@ -84,10 +67,9 @@ export class SessionDetailView {
   private async render(): Promise<void> {
     if (!this.sessionId) return;
 
-    const [session, transcript, insight] = await Promise.all([
+    const [session, transcript] = await Promise.all([
       db.getSession(this.sessionId),
       db.getTranscript(this.sessionId),
-      db.getInsight(this.sessionId),
     ]);
 
     if (!session) {
@@ -98,80 +80,6 @@ export class SessionDetailView {
     this.statusEl.textContent = `${new Date(session.startedAt).toLocaleString()} · ${Math.round(session.durationMs / 1000)}s · ${transcript?.redactionCount ?? 0} redactions`;
 
     this.transcriptEl.textContent = transcript?.text || '(no speech detected)';
-    this.renderInsight(insight?.insight ?? null);
-
-    const hasTranscript = !!transcript?.text.trim();
-    if (insight) {
-      this.analyseBtn.textContent = 'Re-run analysis';
-      this.analyseBtn.disabled = !this.pipeline.extractor.isReady;
-    } else if (this.pipeline.extractor.isReady) {
-      this.analyseBtn.textContent = 'Analyse now';
-      this.analyseBtn.disabled = !hasTranscript;
-    } else {
-      // LLM is optional: explain why extraction didn't run and how to enable it.
-      this.analyseBtn.textContent = 'Download LLM & analyse';
-      this.analyseBtn.disabled = !hasTranscript || !hasWebGPU();
-    }
-  }
-
-  private renderInsight(insight: Insight | null): void {
-    this.insightEl.replaceChildren();
-    if (!insight) {
-      const none = el('p');
-      none.textContent = this.pipeline.extractor.isReady
-        ? 'No insights extracted yet.'
-        : hasWebGPU()
-          ? 'Insight extraction is optional and the LLM is not loaded — tap “Download LLM & analyse” below to enable it.'
-          : 'Insight extraction unavailable: this browser does not support WebGPU.';
-      none.style.color = 'var(--muted)';
-      this.insightEl.append(none);
-      return;
-    }
-
-    const card = el('div', 'insight-card');
-    const rows: [string, string][] = [
-      ['Party support', insight.party_support.replace(/_/g, ' ')],
-      ['Sentiment', insight.sentiment.replace(/_/g, ' ')],
-      [
-        'Key issues',
-        insight.key_issues.length
-          ? insight.key_issues.map((i) => i.replace(/_/g, ' ')).join(', ')
-          : '—',
-      ],
-      ['Follow-up requested', insight.follow_up_requested ? 'Yes' : 'No'],
-      ['Notes', insight.notes || '—'],
-    ];
-    for (const [label, value] of rows) {
-      const row = el('div', 'row');
-      const l = el('span', 'label');
-      l.textContent = label;
-      const v = el('span');
-      v.textContent = value;
-      v.style.textAlign = 'right';
-      row.append(l, v);
-      card.append(row);
-    }
-    this.insightEl.append(card);
-  }
-
-  private async analyse(): Promise<void> {
-    if (!this.sessionId) return;
-    this.analyseBtn.disabled = true;
-    try {
-      if (!this.pipeline.extractor.isReady) {
-        // User opted to enable the optional LLM from here.
-        this.analyseBtn.textContent = 'Downloading LLM…';
-        await this.pipeline.extractor.load();
-      }
-      this.analyseBtn.textContent = 'Analysing…';
-      await this.pipeline.analyseSession(this.sessionId);
-      await this.render();
-      this.events.onChanged();
-    } catch (err) {
-      this.analyseBtn.textContent =
-        err instanceof Error ? err.message : 'Analysis failed';
-      this.analyseBtn.disabled = false;
-    }
   }
 
   private async remove(): Promise<void> {

@@ -1,9 +1,8 @@
 /**
- * Session list screen: past sessions with status, date and insight tags.
+ * Session list screen: past sessions with status and date.
  */
 
 import * as db from '../storage/db';
-import type { InsightRecord } from '../storage/db';
 import { el } from './app';
 
 interface SessionsViewEvents {
@@ -25,13 +24,7 @@ export class SessionsView {
   }
 
   async refresh(): Promise<void> {
-    const [sessions, insights] = await Promise.all([
-      db.listSessions(),
-      db.listInsights(),
-    ]);
-    const insightBySession = new Map<string, InsightRecord>(
-      insights.map((i) => [i.sessionId, i]),
-    );
+    const sessions = await db.listSessions();
 
     this.listEl.replaceChildren();
 
@@ -56,25 +49,9 @@ export class SessionsView {
       meta.append(date, status);
 
       const summary = el('div', 'summary');
-      const insight = insightBySession.get(session.id);
-      summary.textContent = insight?.insight.notes
-        ? insight.insight.notes
-        : `${Math.round(session.durationMs / 1000)}s recording`;
+      summary.textContent = `${Math.round(session.durationMs / 1000)}s recording`;
 
       card.append(meta, summary);
-
-      if (insight) {
-        const tags = el('div', 'tags');
-        const party = el('span', 'tag');
-        party.textContent = insight.insight.party_support.replace(/_/g, ' ');
-        tags.append(party);
-        for (const issue of insight.insight.key_issues.slice(0, 4)) {
-          const tag = el('span', 'tag');
-          tag.textContent = issue.replace(/_/g, ' ');
-          tags.append(tag);
-        }
-        card.append(tags);
-      }
 
       const open = () => this.events.onOpen(session.id);
       card.addEventListener('click', open);

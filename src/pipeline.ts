@@ -1,20 +1,17 @@
 /**
  * Pipeline orchestration:
- *   record chunk → transcribe → REDACT → store transcript → (session end)
- *   → LLM extraction → store insight → delete audio (default policy).
+ *   record chunk → transcribe → REDACT → store transcript.
  *
  * Privacy rules enforced here:
  *  - Raw transcript text exists in memory only.
  *  - Audio chunks are kept in memory unless keepAudio is enabled, and are
  *    deleted after transcription when they were persisted.
- *  - The LLM only ever receives redacted text.
  */
 
 import { ChunkedRecorder, decodeToMono16k, type AudioChunk } from './audio/recorder';
 import { Transcriber } from './transcription/transcriber';
 import type { WhisperModelId } from './transcription/transcription-protocol';
 import { DEFAULT_WHISPER_MODEL } from './transcription/transcription-protocol';
-import { InsightExtractor, DEFAULT_LLM_MODEL, type Insight } from './llm/extractor';
 import { redactPII } from './privacy/redact';
 import * as db from './storage/db';
 
@@ -22,19 +19,16 @@ export interface PipelineEvents {
   /** Called with the running REDACTED transcript whenever a new chunk is transcribed. */
   onTranscriptUpdate?: (sessionId: string, text: string) => void;
   onStatusChange?: (status: string) => void;
-  onInsight?: (sessionId: string, insight: Insight) => void;
   onError?: (message: string) => void;
 }
 
 export interface PipelineOptions {
   keepAudio?: boolean;
   whisperModel?: WhisperModelId;
-  llmModel?: string;
 }
 
 export class SessionPipeline {
   readonly transcriber = new Transcriber();
-  readonly extractor = new InsightExtractor();
 
   private recorder: ChunkedRecorder | null = null;
   private sessionId: string | null = null;
@@ -43,7 +37,6 @@ export class SessionPipeline {
   private redactionCount = 0;
   private keepAudio: boolean;
   private whisperModel: WhisperModelId;
-  private llmModel: string;
   private chunkQueue: Promise<void> = Promise.resolve();
   private pendingChunks = 0;
   private readonly events: PipelineEvents;
@@ -52,7 +45,6 @@ export class SessionPipeline {
     this.events = events;
     this.keepAudio = options.keepAudio ?? false;
     this.whisperModel = options.whisperModel ?? DEFAULT_WHISPER_MODEL;
-    this.llmModel = options.llmModel ?? DEFAULT_LLM_MODEL;
   }
 
   get activeSessionId(): string | null {
@@ -84,7 +76,6 @@ export class SessionPipeline {
       durationMs: 0,
       status: 'recorded',
       whisperModel: this.whisperModel,
-      llmModel: null,
     });
 
     this.recorder = new ChunkedRecorder((chunk) => this.handleChunk(chunk));
@@ -137,7 +128,7 @@ export class SessionPipeline {
 
   /**
    * Stop recording, finish pending transcriptions, persist the redacted
-   * transcript, run LLM extraction (if loaded), and clean up audio.
+   * transcript, and clean up audio.
    */
   async endSession(): Promise<void> {
     const sessionId = this.sessionId;
@@ -172,50 +163,10 @@ export class SessionPipeline {
     }
 
     this.sessionId = null;
-
-    if (this.extractor.isReady && transcript.trim().length > 0) {
-      this.events.onStatusChange?.('Extracting insights…');
-      try {
-        const insight = await this.extractor.extract(transcript);
-        await db.putInsight({ sessionId, insight, createdAt: Date.now() });
-        await db.updateSession(sessionId, {
-          status: 'analysed',
-          llmModel: this.llmModel,
-        });
-        this.events.onInsight?.(sessionId, insight);
-      } catch (err) {
-        this.events.onError?.(
-          err instanceof Error ? err.message : 'Insight extraction failed',
-        );
-      }
-    } else if (!this.extractor.isReady) {
-      // LLM is optional: without it the session stays transcribed-only.
-      this.events.onStatusChange?.(
-        'Session saved (insight extraction skipped — LLM not loaded)',
-      );
-      return;
-    }
-
     this.events.onStatusChange?.('Session saved');
-  }
-
-  /** Re-run extraction for an existing session (e.g. after loading the LLM later). */
-  async analyseSession(sessionId: string): Promise<Insight> {
-    if (!this.extractor.isReady) throw new Error('LLM not loaded yet');
-    const transcript = await db.getTranscript(sessionId);
-    if (!transcript?.text.trim()) throw new Error('No transcript to analyse');
-
-    const insight = await this.extractor.extract(transcript.text);
-    await db.putInsight({ sessionId, insight, createdAt: Date.now() });
-    await db.updateSession(sessionId, {
-      status: 'analysed',
-      llmModel: this.llmModel,
-    });
-    return insight;
   }
 
   dispose(): void {
     this.transcriber.dispose();
-    void this.extractor.unload();
   }
 }

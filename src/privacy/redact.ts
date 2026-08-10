@@ -1,9 +1,8 @@
 /**
  * Rule-based PII redaction.
  *
- * Defence-in-depth layer 1: deterministic regex/pattern redaction applied to
- * transcripts BEFORE anything is written to disk or passed to the LLM.
- * Layer 2 is the LLM prompt, which instructs the model to never emit PII.
+ * Deterministic regex/pattern redaction applied to transcripts BEFORE
+ * anything is written to disk.
  *
  * All functions here are pure and unit-testable.
  */
