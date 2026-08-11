@@ -26,7 +26,15 @@ const MIME_CANDIDATES = [
   'audio/ogg;codecs=opus',
 ];
 
-const DEFAULT_CHUNK_MS = 10_000;
+/**
+ * Whisper pads every input to a fixed 30 s mel spectrogram, so a chunk
+ * shorter than that costs a full 30 s inference regardless — a 10 s chunk
+ * paid three times over. Matching the chunk length to the window is the
+ * cheapest large win available on slow devices.
+ */
+const DEFAULT_CHUNK_MS = 30_000;
+
+const TARGET_SAMPLE_RATE = 16_000;
 
 interface WakeLockSentinelLike {
   release(): Promise<void>;
@@ -36,7 +44,6 @@ export class ChunkedRecorder {
   private mediaRecorder: MediaRecorder | null = null;
   private stream: MediaStream | null = null;
   private sequence = 0;
-  private chunkStartedAt = 0;
   private wakeLock: WakeLockSentinelLike | null = null;
   private restartTimer: number | null = null;
 
@@ -134,6 +141,7 @@ export class ChunkedRecorder {
     this.sequence = 0;
     this._isRecording = true;
     await this.acquireWakeLock();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.startChunk(mimeType);
   }
 
@@ -141,7 +149,10 @@ export class ChunkedRecorder {
     if (!this.stream || !this._isRecording) return;
 
     const seq = this.sequence++;
-    this.chunkStartedAt = Date.now();
+    // Held in locals, not on the instance: ondataavailable fires after the
+    // next startChunk() below has already run, so instance fields would
+    // report the *following* chunk's timings.
+    const startedAt = Date.now();
     const recorder = new MediaRecorder(this.stream, { mimeType });
     this.mediaRecorder = recorder;
 
@@ -151,8 +162,8 @@ export class ChunkedRecorder {
           blob: event.data,
           mimeType,
           sequence: seq,
-          startedAt: this.chunkStartedAt,
-          durationMs: Date.now() - this.chunkStartedAt,
+          startedAt,
+          durationMs: Date.now() - startedAt,
         });
       }
     };
@@ -162,9 +173,9 @@ export class ChunkedRecorder {
       void this.stop();
     };
 
-    // timeslice gives us a blob per chunk without needing restart logic,
-    // but we still rotate the recorder each chunk for container integrity
-    // (a single long webm stream can be unplayable if the page dies).
+    // The recorder is rotated once per chunk rather than run with a
+    // timeslice, for container integrity: a single long webm stream can be
+    // unplayable if the page dies mid-write.
     recorder.start();
 
     this.restartTimer = window.setTimeout(() => {
@@ -176,6 +187,7 @@ export class ChunkedRecorder {
   async stop(): Promise<void> {
     if (!this._isRecording) return;
     this._isRecording = false;
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
 
     if (this.restartTimer !== null) {
       window.clearTimeout(this.restartTimer);
@@ -195,6 +207,17 @@ export class ChunkedRecorder {
     this.stream = null;
     await this.releaseWakeLock();
   }
+
+  /**
+   * The browser auto-releases a screen wake lock whenever the page is
+   * hidden and never restores it, so without this the lock silently stops
+   * working the first time the canvasser switches apps.
+   */
+  private readonly onVisibilityChange = (): void => {
+    if (document.visibilityState === 'visible' && this._isRecording) {
+      void this.acquireWakeLock();
+    }
+  };
 
   private async acquireWakeLock(): Promise<void> {
     try {
@@ -220,43 +243,75 @@ export class ChunkedRecorder {
   }
 }
 
+/** Down-mix to a single channel, always returning a detachable copy. */
+function toMono(decoded: AudioBuffer): Float32Array<ArrayBuffer> {
+  if (decoded.numberOfChannels === 1) {
+    // Copied rather than returned directly: the caller transfers this
+    // buffer to the worker, which would detach the AudioBuffer's own store.
+    const single = decoded.getChannelData(0);
+    const copy = new Float32Array(single.length);
+    copy.set(single);
+    return copy;
+  }
+  const mono = new Float32Array(decoded.length);
+  for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+    const data = decoded.getChannelData(ch);
+    for (let i = 0; i < data.length; i++) mono[i] += data[i];
+  }
+  for (let i = 0; i < mono.length; i++) mono[i] /= decoded.numberOfChannels;
+  return mono;
+}
+
+/**
+ * A single live AudioContext, reused across every call.
+ *
+ * Only used by the fallback path below. Creating one per chunk — as this
+ * module used to — spins up a hardware audio unit each time and runs into
+ * WebKit's cap of roughly four concurrent contexts partway through a long
+ * session, which is precisely when older iPhones stopped transcribing.
+ */
+let fallbackCtx: AudioContext | null = null;
+
+function sharedFallbackContext(): AudioContext {
+  if (!fallbackCtx || fallbackCtx.state === 'closed') {
+    fallbackCtx = new AudioContext();
+  }
+  return fallbackCtx;
+}
+
 /** Decode an audio blob to mono 16 kHz PCM for Whisper. */
 export async function decodeToMono16k(blob: Blob): Promise<Float32Array> {
-  const arrayBuffer = await blob.arrayBuffer();
-  const offlineTargetRate = 16_000;
-
-  const decodeCtx = new AudioContext();
   try {
-    const decoded = await decodeCtx.decodeAudioData(arrayBuffer);
-
-    // Down-mix to mono.
-    const mono = new Float32Array(decoded.length);
-    for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-      const data = decoded.getChannelData(ch);
-      for (let i = 0; i < data.length; i++) mono[i] += data[i];
-    }
-    if (decoded.numberOfChannels > 1) {
-      for (let i = 0; i < mono.length; i++) mono[i] /= decoded.numberOfChannels;
-    }
-
-    if (decoded.sampleRate === offlineTargetRate) return mono;
-
-    // Resample via OfflineAudioContext.
-    const duration = mono.length / decoded.sampleRate;
-    const offline = new OfflineAudioContext(
-      1,
-      Math.ceil(duration * offlineTargetRate),
-      offlineTargetRate,
-    );
-    const buffer = offline.createBuffer(1, mono.length, decoded.sampleRate);
-    buffer.copyToChannel(mono, 0);
-    const source = offline.createBufferSource();
-    source.buffer = buffer;
-    source.connect(offline.destination);
-    source.start();
-    const rendered = await offline.startRendering();
-    return rendered.getChannelData(0).slice();
-  } finally {
-    void decodeCtx.close();
+    // decodeAudioData resamples to its context's rate, so an offline
+    // context at 16 kHz decodes and resamples in one pass — no hardware
+    // audio unit, and none of the intermediate buffers a separate render
+    // pass would need.
+    const offline = new OfflineAudioContext(1, 1, TARGET_SAMPLE_RATE);
+    return toMono(await offline.decodeAudioData(await blob.arrayBuffer()));
+  } catch {
+    // Older WebKit builds reject decodeAudioData on an OfflineAudioContext.
+    // Re-read the blob: the first attempt detached its ArrayBuffer.
+    return decodeViaLiveContext(await blob.arrayBuffer());
   }
+}
+
+async function decodeViaLiveContext(
+  arrayBuffer: ArrayBuffer,
+): Promise<Float32Array> {
+  const decoded = await sharedFallbackContext().decodeAudioData(arrayBuffer);
+  const mono = toMono(decoded);
+  if (decoded.sampleRate === TARGET_SAMPLE_RATE) return mono;
+
+  const offline = new OfflineAudioContext(
+    1,
+    Math.ceil((mono.length / decoded.sampleRate) * TARGET_SAMPLE_RATE),
+    TARGET_SAMPLE_RATE,
+  );
+  const buffer = offline.createBuffer(1, mono.length, decoded.sampleRate);
+  buffer.copyToChannel(mono, 0);
+  const source = offline.createBufferSource();
+  source.buffer = buffer;
+  source.connect(offline.destination);
+  source.start();
+  return (await offline.startRendering()).getChannelData(0).slice();
 }

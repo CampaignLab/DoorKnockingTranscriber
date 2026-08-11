@@ -29,6 +29,7 @@ export class App {
     this.root = root;
     this.pipeline = new SessionPipeline({
       onError: (message) => this.showError(message),
+      onProgress: (done, total) => this.recordView.setProgress(done, total),
     });
 
     this.recordView = new RecordView(this.pipeline, {
@@ -68,29 +69,64 @@ export class App {
     this.root.append(this.main);
 
     // Notes are kept until shared, or for one week — wipe anything older.
-    void db.purgeExpired();
-    // If the last page load died mid-transcription (out-of-memory kill on
-    // older phones reloads the tab), remember it — the message is shown
-    // after the view renders, since show() clears <main>.
-    const crashed = db.consumeWatchdog();
+    await db.purgeExpired();
+    // Audio from a session that already produced its note (or whose session
+    // is gone entirely) must never survive a restart. Awaited so it settles
+    // before we look for sessions worth resuming.
+    await db.purgeOrphanAudioChunks();
     // A refresh mid-day must not orphan the block being recorded into.
     await this.recordView.restoreBlock();
 
-    // Gate on the model being ready, not on a flag: if setup was
-    // interrupted, the welcome screen is shown again and the download
-    // resumes automatically.
+    // Gate on the setting alone. The worker is torn down between sessions
+    // to free memory, so `transcriber.isReady` is false on almost every
+    // launch and gating on it sent returning users back to the welcome
+    // screen every time.
     const onboarded = await db.getSetting(db.SETTINGS_KEYS.onboarded);
-    this.show(
-      onboarded === 'true' && this.pipeline.transcriber.isReady
-        ? 'record'
-        : 'onboarding',
-    );
+    this.show(onboarded === 'true' ? 'record' : 'onboarding');
 
-    if (crashed) {
-      this.showError(
-        'That recording was too much for this phone and the page reloaded. ' +
-          'Your earlier notes are safe — try keeping recordings shorter.',
-      );
+    if (onboarded === 'true') await this.offerResume();
+  }
+
+  /**
+   * A session whose audio is still buffered was interrupted — the tab was
+   * killed, or the app closed mid-write-up. The recording is still here, so
+   * offer to finish the note instead of losing it.
+   */
+  private async offerResume(): Promise<void> {
+    const pending = await db.findResumableSessions();
+    if (pending.length === 0) return;
+
+    const box = el('div', 'error-box');
+    const text = el('p');
+    text.textContent =
+      pending.length === 1
+        ? 'A recording was interrupted before it was written up. It is still here.'
+        : `${pending.length} recordings were interrupted before they were written up. They are still here.`;
+
+    const btn = el('button', 'btn');
+    btn.type = 'button';
+    btn.textContent = 'Finish writing them up';
+    btn.addEventListener('click', () => {
+      box.remove();
+      void this.resumeSessions(pending.map((s) => s.id));
+    });
+
+    box.append(text, btn);
+    this.main.prepend(box);
+  }
+
+  private async resumeSessions(sessionIds: string[]): Promise<void> {
+    if (this.view !== 'record') this.show('record');
+    for (const sessionId of sessionIds) {
+      try {
+        await this.recordView.runResumed(sessionId);
+      } catch (err) {
+        this.showError(
+          err instanceof Error
+            ? err.message
+            : 'That note could not be finished.',
+        );
+      }
     }
   }
 

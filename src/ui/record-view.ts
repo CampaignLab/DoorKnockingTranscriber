@@ -33,6 +33,7 @@ export class RecordView {
   private promptEl!: HTMLElement;
   private transcriptEl!: HTMLElement;
   private spinnerEl!: HTMLElement;
+  private spinnerTextEl!: HTMLElement;
   private blockEl!: HTMLElement;
   private finishBlockBtn!: HTMLButtonElement;
   private notesLink!: HTMLButtonElement;
@@ -118,10 +119,10 @@ export class RecordView {
     this.spinnerEl = el('div', 'working-note');
     this.spinnerEl.setAttribute('role', 'status');
     const spinnerIcon = el('span', 'spinner');
-    const spinnerText = el('p', 'setup-note');
-    spinnerText.textContent =
+    this.spinnerTextEl = el('p', 'setup-note');
+    this.spinnerTextEl.textContent =
       'Writing up your conversation — take a breath, this only takes a moment.';
-    this.spinnerEl.append(spinnerIcon, spinnerText);
+    this.spinnerEl.append(spinnerIcon, this.spinnerTextEl);
     this.spinnerEl.style.display = 'none';
 
     // Current block status + finish action.
@@ -248,10 +249,6 @@ export class RecordView {
         await db.putSetting(db.SETTINGS_KEYS.currentBlockId, block.id);
       }
 
-      // Watchdog: if the tab is killed mid-transcription (out of memory
-      // on older phones), the flag survives the reload and we can show a
-      // helpful message instead of a mysterious refresh.
-      db.setWatchdog(true);
       await this.pipeline.startSession(this.blockId);
       this.pipelineEventsHook();
       this.startedAt = Date.now();
@@ -272,14 +269,48 @@ export class RecordView {
   }
 
   private pipelineEventsHook(): void {
-    // Collect the transcript as chunks arrive; the box itself is
+    // Collect the transcript as chunks are written up; the box itself is
     // revealed only after the session has been saved.
-    const pipeline = this.pipeline as unknown as {
-      events: { onTranscriptUpdate?: (id: string, text: string) => void };
-    };
-    pipeline.events.onTranscriptUpdate = (_id, text) => {
+    this.pipeline.events.onTranscriptUpdate = (_id, text) => {
       this.transcriptEl.textContent = text;
     };
+  }
+
+  /**
+   * Show real progress while a session is written up. Transcription now
+   * happens after recording rather than alongside it, so this wait is
+   * visible and needs to look like it is going somewhere.
+   */
+  setProgress(done: number, total: number): void {
+    if (total <= 1) {
+      this.spinnerTextEl.textContent =
+        'Writing up your conversation — take a breath, this only takes a moment.';
+      return;
+    }
+    this.spinnerTextEl.textContent = `Writing up your conversation — part ${Math.min(done + 1, total)} of ${total}.`;
+  }
+
+  /** Drive the transcription spinner for a session resumed after a crash. */
+  async runResumed(sessionId: string): Promise<void> {
+    this.busy = true;
+    this.pipelineEventsHook();
+    this.setStatus('Finishing an interrupted note…');
+    this.spinnerEl.style.display = '';
+    this.setProgress(0, 0);
+    this.updateButtonVisibility();
+    try {
+      await this.pipeline.transcribeSession(sessionId);
+      this.setStatus('Saved. Tap the red button at the next door.');
+      if (this.transcriptEl.textContent) {
+        this.transcriptEl.style.display = '';
+      }
+      await this.refreshBlockStatus();
+      this.events.onSessionEnded();
+    } finally {
+      this.busy = false;
+      this.spinnerEl.style.display = 'none';
+      this.updateButtonVisibility();
+    }
   }
 
   private async stop(): Promise<void> {
@@ -291,19 +322,11 @@ export class RecordView {
     }
     this.timerEl.textContent = '';
     this.setStatus('Writing it down…');
+    this.setProgress(0, 0);
     this.spinnerEl.style.display = '';
     this.updateButtonVisibility();
-    // If transcription somehow never finishes, recover the button rather
-    // than stranding the user on a spinner forever.
-    const watchdog = window.setTimeout(() => {
-      this.spinnerEl.style.display = 'none';
-      this.updateButtonVisibility();
-    }, 120000);
     try {
       await this.pipeline.endSession();
-      db.setWatchdog(false);
-      window.clearTimeout(watchdog);
-      this.spinnerEl.style.display = 'none';
       this.setStatus('Saved. Tap the red button at the next door.');
       // Show the written note once it exists.
       if (this.transcriptEl.textContent) {
@@ -312,12 +335,11 @@ export class RecordView {
       await this.refreshBlockStatus();
       this.events.onSessionEnded();
     } catch (err) {
-      window.clearTimeout(watchdog);
-      this.spinnerEl.style.display = 'none';
       this.setStatus(
         err instanceof Error ? err.message : 'Could not save — please try again.',
       );
     } finally {
+      this.spinnerEl.style.display = 'none';
       this.updateButtonVisibility();
     }
   }

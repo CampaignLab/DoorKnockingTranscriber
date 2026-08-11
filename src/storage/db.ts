@@ -3,13 +3,20 @@
  *
  * Privacy invariants enforced here:
  *  - Everything stays on the device — nothing is ever uploaded.
- *  - `audioChunks` retention is off by default: audio lives only in memory
- *    and is deleted/discarded as soon as it has been transcribed.
+ *  - `audioChunks` is a short-lived buffer, not storage: a chunk exists only
+ *    between being recorded and being transcribed, and is deleted the moment
+ *    its text has been written. Anything left over (a crash mid-session) is
+ *    swept at the next startup by `purgeOrphanAudioChunks`.
  */
 
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
-export type SessionStatus = 'recorded' | 'transcribed';
+/**
+ * 'recorded'    — audio captured, not yet written up.
+ * 'transcribing' — being written up right now; resumable if the tab dies.
+ * 'transcribed'  — done; no audio remains.
+ */
+export type SessionStatus = 'recorded' | 'transcribing' | 'transcribed';
 
 export interface SessionRecord {
   id: string;
@@ -58,36 +65,6 @@ export const SETTINGS_KEYS = {
   /** Id of the block currently being recorded into, so a refresh rejoins it. */
   currentBlockId: 'currentBlockId',
 } as const;
-
-/**
- * Crash watchdog flag (sessionStorage, so it survives a tab kill/reload
- * but not a fresh visit). Set before transcription starts and cleared on
- * success; if the page reloads and this is set, the previous session was
- * killed mid-transcription — almost always by the OS for using too much
- * memory on an older phone.
- */
-export const WATCHDOG_KEY = 'transcribing';
-
-export function setWatchdog(active: boolean): void {
-  try {
-    if (active) sessionStorage.setItem(WATCHDOG_KEY, '1');
-    else sessionStorage.removeItem(WATCHDOG_KEY);
-  } catch {
-    // sessionStorage unavailable (private mode etc.) — watchdog just
-    // won't fire; not worth surfacing.
-  }
-}
-
-/** True if the previous page load died mid-transcription. */
-export function consumeWatchdog(): boolean {
-  try {
-    const tripped = sessionStorage.getItem(WATCHDOG_KEY) === '1';
-    if (tripped) sessionStorage.removeItem(WATCHDOG_KEY);
-    return tripped;
-  } catch {
-    return false;
-  }
-}
 
 interface DoorNotesDB extends DBSchema {
   sessionBlocks: { key: string; value: SessionBlockRecord };
@@ -299,7 +276,7 @@ export async function deleteSession(id: string): Promise<void> {
   await tx.done;
 }
 
-// --- Audio chunks (optional retention) ---
+// --- Audio chunks (short-lived buffer between recording and transcription) ---
 
 export async function putAudioChunk(
   record: Omit<AudioChunkRecord, 'id' | 'createdAt'>,
@@ -309,6 +286,84 @@ export async function putAudioChunk(
     id: `${record.sessionId}:${record.sequence}`,
     createdAt: Date.now(),
   });
+}
+
+/** Chunk id → its sequence number. Ids are `${sessionId}:${sequence}`. */
+function sequenceOf(id: string): number {
+  return Number(id.slice(id.lastIndexOf(':') + 1));
+}
+
+/** Chunk id → the session it belongs to. */
+function sessionOf(id: string): string {
+  return id.slice(0, id.lastIndexOf(':'));
+}
+
+/**
+ * Chunk ids for a session, in recorded order.
+ *
+ * Deliberately keys-only: the caller loads one blob at a time, so a long
+ * session never has more than a single chunk of audio in memory.
+ */
+export async function listAudioChunkIdsForSession(
+  sessionId: string,
+): Promise<string[]> {
+  const keys = await (await db()).getAllKeysFromIndex(
+    'audioChunks',
+    'by-sessionId',
+    sessionId,
+  );
+  return keys.sort((a, b) => sequenceOf(a) - sequenceOf(b));
+}
+
+export async function getAudioChunk(
+  id: string,
+): Promise<AudioChunkRecord | undefined> {
+  return (await db()).get('audioChunks', id);
+}
+
+export async function deleteAudioChunk(id: string): Promise<void> {
+  await (await db()).delete('audioChunks', id);
+}
+
+/**
+ * Sweep audio left behind by a crash: any chunk whose session is gone, or
+ * whose session is already written up. Runs at startup so recordings never
+ * outlive the note they produced.
+ *
+ * Works from keys and session metadata only — no blobs are read.
+ */
+export async function purgeOrphanAudioChunks(): Promise<void> {
+  const database = await db();
+  const keys = await database.getAllKeys('audioChunks');
+  if (keys.length === 0) return;
+
+  const stillNeeded = new Set<string>();
+  for (const session of await database.getAll('sessions')) {
+    if (session.status !== 'transcribed') stillNeeded.add(session.id);
+  }
+
+  const tx = database.transaction('audioChunks', 'readwrite');
+  for (const key of keys) {
+    if (!stillNeeded.has(sessionOf(key))) await tx.store.delete(key);
+  }
+  await tx.done;
+}
+
+/**
+ * Sessions interrupted before their audio was fully written up — the tab was
+ * killed, or the app was closed mid-transcription. The audio is still on
+ * disk, so the note can be finished rather than lost.
+ */
+export async function findResumableSessions(): Promise<SessionRecord[]> {
+  const database = await db();
+  const keys = await database.getAllKeys('audioChunks');
+  if (keys.length === 0) return [];
+
+  const withAudio = new Set(keys.map(sessionOf));
+  const sessions = await database.getAll('sessions');
+  return sessions
+    .filter((s) => s.status !== 'transcribed' && withAudio.has(s.id))
+    .sort((a, b) => a.startedAt - b.startedAt);
 }
 
 export async function deleteAudioChunksForSession(

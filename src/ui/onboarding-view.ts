@@ -192,6 +192,11 @@ export class OnboardingView {
 
     await db.putSetting(db.SETTINGS_KEYS.onboarded, 'true');
 
+    // Setup only needed the model files in Cache Storage. Release the WASM
+    // heap now rather than holding hundreds of MB open behind the record
+    // screen — it is reloaded, quickly and offline, when a note is written up.
+    this.pipeline.transcriber.dispose();
+
     this.events.onComplete();
   }
 }

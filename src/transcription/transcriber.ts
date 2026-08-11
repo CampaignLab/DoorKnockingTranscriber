@@ -15,6 +15,13 @@ export interface LoadProgress {
   progress?: number;
 }
 
+/**
+ * Ceiling for one chunk. Generous — a 30 s chunk on a slow phone can take
+ * tens of seconds — but finite, because a worker killed by the OS never
+ * replies at all, and without this the caller would await it forever.
+ */
+const TRANSCRIBE_TIMEOUT_MS = 90_000;
+
 export class Transcriber {
   private worker: Worker | null = null;
   private ready = false;
@@ -87,7 +94,13 @@ export class Transcriber {
       };
 
       this.worker.onerror = (event) => {
-        reject(new Error(event.message ?? 'Whisper worker error'));
+        // Reject everything in flight, not just the load: after startup
+        // this used to resolve nothing at all, so a worker that died took
+        // the whole session down with it.
+        const error = new Error(event.message || 'Whisper worker error');
+        this.ready = false;
+        this.rejectPending(error);
+        reject(error);
       };
 
       this.worker!.postMessage({ type: 'load', model });
@@ -103,7 +116,26 @@ export class Transcriber {
     }
     const id = this.nextId++;
     return new Promise<string>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        // Nothing came back. Assume the worker is wedged or was killed for
+        // memory, and tear it down so the next attempt starts on a clean
+        // WASM heap rather than inheriting a broken one.
+        if (this.pending.delete(id)) {
+          this.disposeWorker();
+          reject(new Error('Transcription timed out'));
+        }
+      }, TRANSCRIBE_TIMEOUT_MS);
+
+      this.pending.set(id, {
+        resolve: (text) => {
+          clearTimeout(timer);
+          resolve(text);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
       // Transfer the underlying buffer to avoid copying large PCM data.
       this.worker!.postMessage({ type: 'transcribe', id, audio }, [
         audio.buffer,
@@ -115,14 +147,16 @@ export class Transcriber {
     this.disposeWorker();
   }
 
+  private rejectPending(err: Error): void {
+    for (const entry of this.pending.values()) entry.reject(err);
+    this.pending.clear();
+  }
+
   private disposeWorker(): void {
     this.worker?.terminate();
     this.worker = null;
     this.ready = false;
     this.readyPromise = null;
-    for (const entry of this.pending.values()) {
-      entry.reject(new Error('Transcriber disposed'));
-    }
-    this.pending.clear();
+    this.rejectPending(new Error('Transcriber disposed'));
   }
 }
